@@ -79,6 +79,13 @@ const DEFAULT_FORM: FormState = {
   note: "",
 };
 
+const SIDEBAR_MENUS = [
+  { label: "控制台总览", description: "系统首页与运营看板", active: false },
+  { label: "费用类型维护", description: "费用类型、查询与配置", active: true },
+  { label: "操作日志", description: "最近变更与留痕记录", active: false },
+  { label: "登录态管理", description: "当前创建人与操作人", active: false },
+] as const;
+
 type FeeTypeManagerProps = {
   initialRows: FeeTypeRecord[];
   initialOperationLogs: FeeTypeOperationLogRecord[];
@@ -218,6 +225,49 @@ export function FeeTypeManager({
   );
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedIds.includes(row.id));
   const visiblePages = getVisiblePages(pagination.totalPages, pagination.page);
+  const activeFilterCount = [
+    filters.feeCode.trim(),
+    filters.feeName.trim(),
+    filters.businessDomain,
+    filters.quoteTypes.length > 0 ? "quoteTypes" : "",
+  ].filter(Boolean).length;
+  const latestOperation = operationLogs[0];
+  const overviewCards = useMemo(
+    () => [
+      {
+        label: "费用类型总数",
+        value: `${pagination.total}`,
+        note: `当前第 ${pagination.page} / ${pagination.totalPages} 页`,
+        tone: "accent",
+      },
+      {
+        label: "当前选中条数",
+        value: `${selectedIds.length}`,
+        note: selectedIds.length > 0 ? "可直接执行编辑或批量删除" : "先勾选表格数据再操作",
+        tone: "neutral",
+      },
+      {
+        label: "已启用筛选项",
+        value: `${activeFilterCount}`,
+        note: activeFilterCount > 0 ? "查询条件已生效" : "当前查看全部数据",
+        tone: "neutral",
+      },
+      {
+        label: "数据库状态",
+        value: databaseReady ? "已连接" : "待就绪",
+        note: databaseReady ? "接口与列表读取正常" : "等待部署或迁移完成",
+        tone: databaseReady ? "success" : "warning",
+      },
+    ],
+    [
+      activeFilterCount,
+      databaseReady,
+      pagination.page,
+      pagination.total,
+      pagination.totalPages,
+      selectedIds.length,
+    ],
+  );
 
   async function loadOperationLogs() {
     const response = await fetch(`/api/fee-type-operation-logs?take=${OPERATION_LOG_TAKE}`);
@@ -228,6 +278,18 @@ export function FeeTypeManager({
     }
 
     setOperationLogs(data.logs);
+  }
+
+  async function refreshOperationLogs(successMessage?: string) {
+    try {
+      await loadOperationLogs();
+
+      if (successMessage) {
+        setStatus(successMessage);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "查询操作日志失败，请稍后重试。");
+    }
   }
 
   async function loadRows(
@@ -258,20 +320,14 @@ export function FeeTypeManager({
         throw new Error(data.error ?? "查询失败，请稍后重试。");
       }
 
-      const nextRows = data.feeTypes;
-      const nextTotal = data.total;
-      const resolvedPage = data.page;
-      const resolvedPageSize = data.pageSize;
-      const resolvedTotalPages = data.totalPages;
-
       startTransition(() => {
-        setRows(nextRows);
+        setRows(data.feeTypes ?? []);
         setSelectedIds([]);
         setPagination({
-          total: nextTotal,
-          page: resolvedPage,
-          pageSize: resolvedPageSize,
-          totalPages: resolvedTotalPages,
+          total: data.total ?? 0,
+          page: data.page ?? 1,
+          pageSize: data.pageSize ?? DEFAULT_PAGE_SIZE,
+          totalPages: data.totalPages ?? 1,
         });
         setStatus(successMessage ?? "");
       });
@@ -280,6 +336,11 @@ export function FeeTypeManager({
     } finally {
       setLoading(false);
     }
+  }
+
+  async function reloadData(nextPage: number, successMessage: string) {
+    await loadRows(filters, nextPage, pagination.pageSize, successMessage);
+    await refreshOperationLogs();
   }
 
   function resetModal() {
@@ -387,15 +448,10 @@ export function FeeTypeManager({
       }
 
       resetModal();
-      await Promise.all([
-        loadRows(
-          filters,
-          modalMode === "create" ? 1 : pagination.page,
-          pagination.pageSize,
-          modalMode === "create" ? "费用类型新增成功。" : "费用类型编辑成功。",
-        ),
-        loadOperationLogs(),
-      ]);
+      await reloadData(
+        modalMode === "create" ? 1 : pagination.page,
+        modalMode === "create" ? "费用类型新增成功。" : "费用类型编辑成功。",
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "提交失败，请稍后重试。");
       setSubmitting(false);
@@ -429,15 +485,8 @@ export function FeeTypeManager({
         throw new Error(data.error ?? "删除失败，请稍后重试。");
       }
 
-      await Promise.all([
-        loadRows(
-          filters,
-          pagination.page,
-          pagination.pageSize,
-          `已删除 ${data.deletedCount ?? selectedIds.length} 条费用类型数据。`,
-        ),
-        loadOperationLogs(),
-      ]);
+      const deletedCount = data.deletedCount ?? selectedIds.length;
+      await reloadData(pagination.page, `已删除 ${deletedCount} 条费用类型数据。`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "删除失败，请稍后重试。");
       setLoading(false);
@@ -445,13 +494,67 @@ export function FeeTypeManager({
   }
 
   return (
-    <main className="admin-shell">
-      <section className="admin-heading">
-        <p className="page-index">1、新增费用类型维护页面</p>
-        <div className="heading-row">
+    <main className="dashboard-shell">
+      <aside className="dashboard-sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-mark">Z</div>
           <div>
+            <p>结算管理平台</p>
+            <strong>Fee Center</strong>
+          </div>
+        </div>
+
+        <div className="sidebar-section">
+          <p className="sidebar-caption">系统导航</p>
+          <nav className="sidebar-nav" aria-label="系统菜单">
+            {SIDEBAR_MENUS.map((item) => (
+              <button
+                type="button"
+                className={`sidebar-nav-item${item.active ? " active" : ""}`}
+                key={item.label}
+              >
+                <span>{item.label}</span>
+                <small>{item.description}</small>
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        <div className="sidebar-section sidebar-tip-card">
+          <p className="sidebar-caption">当前登录</p>
+          <strong>{operatorName}</strong>
+          <span>创建人、修改人会跟随当前登录态自动写入。</span>
+        </div>
+      </aside>
+
+      <div className="dashboard-main">
+        <header className="system-topbar">
+          <div>
+            <p className="system-breadcrumb">控制台 / 结算配置 / 费用类型维护</p>
             <h1>费用类型维护</h1>
-            <p>支持查询、新增、编辑、查看详情、批量删除、分页和操作日志追踪。</p>
+          </div>
+
+          <div className="topbar-actions">
+            <div className="topbar-badge">
+              <span>环境状态</span>
+              <strong>{databaseReady ? "数据库已连接" : "等待数据库就绪"}</strong>
+            </div>
+            <div className="topbar-badge">
+              <span>最近操作</span>
+              <strong>
+                {latestOperation ? formatDateTime(latestOperation.createdAt) : "暂无记录"}
+              </strong>
+            </div>
+          </div>
+        </header>
+
+        <section className="hero-panel">
+          <div className="hero-copy">
+            <p className="hero-kicker">业务配置中心</p>
+            <h2>前后端、数据库、日志留痕已经串起来了</h2>
+            <p>
+              当前页面支持费用类型的查询、新增、编辑、删除、详情查看、分页切换，以及基于登录态的创建人与修改人记录。
+            </p>
           </div>
 
           <div className="session-panel">
@@ -472,292 +575,343 @@ export function FeeTypeManager({
                 disabled={sessionSaving}
                 onClick={() => void handleOperatorSave()}
               >
-                {sessionSaving ? "切换中..." : "切换登录人"}
+                {sessionSaving ? "保存中..." : "切换登录人"}
               </button>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="workspace-card">
-        <div className="search-grid">
-          <label className="search-field">
-            <span>费用编号</span>
-            <input
-              value={filters.feeCode}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, feeCode: event.target.value }))
-              }
-              placeholder="请输入费用编号"
-            />
-          </label>
+        <section className="overview-grid">
+          {overviewCards.map((card) => (
+            <article className={`overview-card ${card.tone}`} key={card.label}>
+              <p>{card.label}</p>
+              <strong>{card.value}</strong>
+              <span>{card.note}</span>
+            </article>
+          ))}
+        </section>
 
-          <label className="search-field">
-            <span>费用名称</span>
-            <input
-              value={filters.feeName}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, feeName: event.target.value }))
-              }
-              placeholder="请输入费用名称"
-            />
-          </label>
+        <section className="content-grid">
+          <div className="content-stack">
+            <section className="workspace-card">
+              <div className="card-heading">
+                <div>
+                  <p className="section-kicker">筛选与维护</p>
+                  <h3>费用类型列表</h3>
+                </div>
+                <div className="header-pills">
+                  <span className="pill">共 {pagination.total} 条</span>
+                  <span className="pill">每页 {pagination.pageSize} 条</span>
+                  <span className={`pill${loading ? " loading" : ""}`}>
+                    {loading ? "列表刷新中" : "数据已同步"}
+                  </span>
+                </div>
+              </div>
 
-          <label className="search-field">
-            <span>所属业务域</span>
-            <select
-              value={filters.businessDomain}
-              onChange={(event) =>
-                setFilters((current) => ({
-                  ...current,
-                  businessDomain: event.target.value,
-                }))
-              }
-            >
-              <option value="">全部</option>
-              {BUSINESS_DOMAIN_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <QuoteTypeDropdown
-            label="所属报价"
-            value={filters.quoteTypes}
-            onChange={(nextValue) =>
-              setFilters((current) => ({
-                ...current,
-                quoteTypes: nextValue,
-              }))
-            }
-          />
-
-          <div className="search-actions">
-            <button
-              type="button"
-              className="primary-button"
-              disabled={loading}
-              onClick={() => void loadRows(filters, 1, pagination.pageSize, "查询完成。")}
-            >
-              {loading ? "查询中..." : "查询"}
-            </button>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => {
-                setFilters(DEFAULT_FILTERS);
-                void loadRows(DEFAULT_FILTERS, 1, DEFAULT_PAGE_SIZE, "已重置查询条件。");
-              }}
-            >
-              重置
-            </button>
-          </div>
-        </div>
-
-        <div className="toolbar">
-          <button type="button" className="tool-button" onClick={openCreateModal}>
-            <span className="tool-icon">⊕</span>
-            新增
-          </button>
-          <button type="button" className="tool-button" onClick={() => openDetailModal()}>
-            <span className="tool-icon">◉</span>
-            查看
-          </button>
-          <button type="button" className="tool-button" onClick={openEditModal}>
-            <span className="tool-icon">✎</span>
-            编辑
-          </button>
-          <button type="button" className="tool-button danger" onClick={() => void handleDelete()}>
-            <span className="tool-icon">🗑</span>
-            删除
-          </button>
-        </div>
-
-        <div className="table-shell">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>序号</th>
-                <th className="checkbox-cell">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={(event) => {
-                      setSelectedIds(event.target.checked ? rows.map((row) => row.id) : []);
-                    }}
-                  />
-                </th>
-                <th>费用编号</th>
-                <th>费用名称</th>
-                <th>所属业务域</th>
-                <th>所属报价</th>
-                <th>备注</th>
-                <th>创建人</th>
-                <th>创建时间</th>
-                <th>修改人</th>
-                <th>修改时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!databaseReady ? (
-                <tr>
-                  <td colSpan={11} className="empty-row">
-                    数据库尚未就绪，请先完成最新版本部署或等待 migration 执行完成。
-                  </td>
-                </tr>
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={11} className="empty-row">
-                    暂无符合条件的数据。
-                  </td>
-                </tr>
-              ) : (
-                rows.map((row, index) => {
-                  const checked = selectedIds.includes(row.id);
-                  const sequence = (pagination.page - 1) * pagination.pageSize + index + 1;
-
-                  return (
-                    <tr key={row.id}>
-                      <td>{sequence}</td>
-                      <td className="checkbox-cell">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            setSelectedIds((current) =>
-                              checked
-                                ? current.filter((item) => item !== row.id)
-                                : [...current, row.id],
-                            );
-                          }}
-                        />
-                      </td>
-                      <td>{row.feeCode}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="text-link-button"
-                          onClick={() => openDetailModal(row)}
-                        >
-                          {row.feeName}
-                        </button>
-                      </td>
-                      <td>{row.businessDomain}</td>
-                      <td>{row.quoteTypes.join("，") || "-"}</td>
-                      <td>{row.note || "-"}</td>
-                      <td>{row.createdBy}</td>
-                      <td>{formatDateTime(row.createdAt)}</td>
-                      <td>{row.updatedBy}</td>
-                      <td>{formatDateTime(row.updatedAt)}</td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="pagination-bar">
-          <div className="pagination-summary">
-            <span>共 {pagination.total} 条</span>
-            <label className="page-size-switcher">
-              <span>每页</span>
-              <select
-                value={pagination.pageSize}
-                onChange={(event) => {
-                  const nextPageSize = Number(event.target.value);
-                  void loadRows(filters, 1, nextPageSize, `已切换为每页 ${nextPageSize} 条。`);
+              <div
+                className="search-grid"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void loadRows(filters, 1, pagination.pageSize, "查询完成。");
+                  }
                 }}
               >
-                {PAGE_SIZE_OPTIONS.map((size) => (
-                  <option key={size} value={size}>
-                    {size} 条
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+                <label className="search-field">
+                  <span>费用编号</span>
+                  <input
+                    value={filters.feeCode}
+                    onChange={(event) =>
+                      setFilters((current) => ({ ...current, feeCode: event.target.value }))
+                    }
+                    placeholder="请输入费用编号"
+                  />
+                </label>
 
-          <div className="pagination-controls">
-            <button
-              type="button"
-              className="page-button"
-              disabled={loading || pagination.page <= 1}
-              onClick={() => void loadRows(filters, pagination.page - 1, pagination.pageSize)}
-            >
-              上一页
-            </button>
+                <label className="search-field">
+                  <span>费用名称</span>
+                  <input
+                    value={filters.feeName}
+                    onChange={(event) =>
+                      setFilters((current) => ({ ...current, feeName: event.target.value }))
+                    }
+                    placeholder="请输入费用名称"
+                  />
+                </label>
 
-            <div className="page-number-list">
-              {visiblePages.map((pageNumber) => (
+                <label className="search-field">
+                  <span>所属业务域</span>
+                  <select
+                    value={filters.businessDomain}
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        businessDomain: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">全部</option>
+                    {BUSINESS_DOMAIN_OPTIONS.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <QuoteTypeDropdown
+                  label="所属报价"
+                  value={filters.quoteTypes}
+                  onChange={(nextValue) =>
+                    setFilters((current) => ({
+                      ...current,
+                      quoteTypes: nextValue,
+                    }))
+                  }
+                />
+
+                <div className="search-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={loading}
+                    onClick={() => void loadRows(filters, 1, pagination.pageSize, "查询完成。")}
+                  >
+                    {loading ? "查询中..." : "查询"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      setFilters(DEFAULT_FILTERS);
+                      void loadRows(
+                        DEFAULT_FILTERS,
+                        1,
+                        pagination.pageSize,
+                        "已重置查询条件。",
+                      );
+                    }}
+                  >
+                    重置
+                  </button>
+                </div>
+              </div>
+
+              <div className="toolbar">
+                <button type="button" className="tool-button" onClick={openCreateModal}>
+                  <span className="tool-icon">+</span>
+                  新增
+                </button>
+                <button type="button" className="tool-button" onClick={() => openDetailModal()}>
+                  <span className="tool-icon">i</span>
+                  查看
+                </button>
+                <button type="button" className="tool-button" onClick={openEditModal}>
+                  <span className="tool-icon">E</span>
+                  编辑
+                </button>
                 <button
                   type="button"
-                  key={pageNumber}
-                  className={`page-button${pageNumber === pagination.page ? " active" : ""}`}
-                  disabled={loading}
-                  onClick={() => void loadRows(filters, pageNumber, pagination.pageSize)}
+                  className="tool-button danger"
+                  onClick={() => void handleDelete()}
                 >
-                  {pageNumber}
+                  <span className="tool-icon">-</span>
+                  删除
                 </button>
-              ))}
+              </div>
+
+              <div className="table-shell">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>序号</th>
+                      <th className="checkbox-cell">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          onChange={(event) => {
+                            setSelectedIds(event.target.checked ? rows.map((row) => row.id) : []);
+                          }}
+                        />
+                      </th>
+                      <th>费用编号</th>
+                      <th>费用名称</th>
+                      <th>所属业务域</th>
+                      <th>所属报价</th>
+                      <th>备注</th>
+                      <th>创建人</th>
+                      <th>创建时间</th>
+                      <th>修改人</th>
+                      <th>修改时间</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!databaseReady ? (
+                      <tr>
+                        <td colSpan={11} className="empty-row">
+                          数据库尚未就绪，请先完成最新版本部署或等待 migration 执行完成。
+                        </td>
+                      </tr>
+                    ) : rows.length === 0 ? (
+                      <tr>
+                        <td colSpan={11} className="empty-row">
+                          暂无符合条件的数据。
+                        </td>
+                      </tr>
+                    ) : (
+                      rows.map((row, index) => {
+                        const checked = selectedIds.includes(row.id);
+                        const sequence =
+                          (pagination.page - 1) * pagination.pageSize + index + 1;
+
+                        return (
+                          <tr key={row.id}>
+                            <td>{sequence}</td>
+                            <td className="checkbox-cell">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setSelectedIds((current) =>
+                                    checked
+                                      ? current.filter((item) => item !== row.id)
+                                      : [...current, row.id],
+                                  );
+                                }}
+                              />
+                            </td>
+                            <td>{row.feeCode}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="text-link-button"
+                                onClick={() => openDetailModal(row)}
+                              >
+                                {row.feeName}
+                              </button>
+                            </td>
+                            <td>{row.businessDomain}</td>
+                            <td>{row.quoteTypes.join("、") || "-"}</td>
+                            <td>{row.note || "-"}</td>
+                            <td>{row.createdBy}</td>
+                            <td>{formatDateTime(row.createdAt)}</td>
+                            <td>{row.updatedBy}</td>
+                            <td>{formatDateTime(row.updatedAt)}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="pagination-bar">
+                <div className="pagination-summary">
+                  <span>共 {pagination.total} 条</span>
+                  <label className="page-size-switcher">
+                    <span>每页</span>
+                    <select
+                      value={pagination.pageSize}
+                      onChange={(event) => {
+                        const nextPageSize = Number(event.target.value);
+                        void loadRows(
+                          filters,
+                          1,
+                          nextPageSize,
+                          `已切换为每页 ${nextPageSize} 条。`,
+                        );
+                      }}
+                    >
+                      {PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>
+                          {size} 条
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="pagination-controls">
+                  <button
+                    type="button"
+                    className="page-button"
+                    disabled={loading || pagination.page <= 1}
+                    onClick={() => void loadRows(filters, pagination.page - 1, pagination.pageSize)}
+                  >
+                    上一页
+                  </button>
+
+                  <div className="page-number-list">
+                    {visiblePages.map((pageNumber) => (
+                      <button
+                        type="button"
+                        key={pageNumber}
+                        className={`page-button${pageNumber === pagination.page ? " active" : ""}`}
+                        disabled={loading}
+                        onClick={() => void loadRows(filters, pageNumber, pagination.pageSize)}
+                      >
+                        {pageNumber}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="page-button"
+                    disabled={loading || pagination.page >= pagination.totalPages}
+                    onClick={() => void loadRows(filters, pagination.page + 1, pagination.pageSize)}
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
+
+              <div className="workspace-footer">
+                <p className={`status-text${status ? " visible" : ""}`}>{status || " "}</p>
+                <p className="footnote">
+                  当前第 {pagination.page} / {pagination.totalPages} 页。新增后默认回到第一页，删除后会自动修正页码。
+                </p>
+              </div>
+            </section>
+          </div>
+
+          <section className="log-card">
+            <div className="log-header">
+              <div>
+                <p className="section-kicker">最近操作</p>
+                <h3>操作日志</h3>
+              </div>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void refreshOperationLogs("操作日志已刷新。")}
+              >
+                刷新日志
+              </button>
             </div>
 
-            <button
-              type="button"
-              className="page-button"
-              disabled={loading || pagination.page >= pagination.totalPages}
-              onClick={() => void loadRows(filters, pagination.page + 1, pagination.pageSize)}
-            >
-              下一页
-            </button>
-          </div>
-        </div>
-
-        <div className="workspace-footer">
-          <p className={`status-text${status ? " visible" : ""}`}>{status || " "}</p>
-          <p className="footnote">
-            当前第 {pagination.page} / {pagination.totalPages} 页。新增后默认回到第一页，删除后会自动修正页码。
-          </p>
-        </div>
-      </section>
-
-      <section className="log-card">
-        <div className="log-header">
-          <div>
-            <p className="log-kicker">最近操作</p>
-            <h2>操作日志</h2>
-          </div>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => void loadOperationLogs()}
-          >
-            刷新日志
-          </button>
-        </div>
-
-        {operationLogs.length === 0 ? (
-          <div className="log-empty">暂时还没有操作日志。</div>
-        ) : (
-          <div className="log-list">
-            {operationLogs.map((log) => (
-              <article key={log.id} className="log-item">
-                <div className="log-badge">{getOperationLabel(log.operationType)}</div>
-                <div className="log-content">
-                  <p>{log.summary}</p>
-                  <div className="log-meta">
-                    <span>操作人：{log.operatorName}</span>
-                    <span>费用编号：{log.feeCode}</span>
-                    <span>时间：{formatDateTime(log.createdAt)}</span>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
+            {operationLogs.length === 0 ? (
+              <div className="log-empty">暂时还没有操作日志。</div>
+            ) : (
+              <div className="log-list">
+                {operationLogs.map((log) => (
+                  <article key={log.id} className="log-item">
+                    <div className="log-badge">{getOperationLabel(log.operationType)}</div>
+                    <div className="log-content">
+                      <p>{log.summary}</p>
+                      <div className="log-meta">
+                        <span>操作人：{log.operatorName}</span>
+                        <span>费用编号：{log.feeCode}</span>
+                        <span>时间：{formatDateTime(log.createdAt)}</span>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        </section>
+      </div>
 
       {modalMode ? (
         <div className="modal-backdrop" role="presentation">
@@ -797,7 +951,7 @@ export function FeeTypeManager({
                   </div>
                   <div className="detail-item">
                     <span>所属报价</span>
-                    <strong>{detailRow.quoteTypes.join("，") || "-"}</strong>
+                    <strong>{detailRow.quoteTypes.join("、") || "-"}</strong>
                   </div>
                   <div className="detail-item full-span">
                     <span>备注</span>
@@ -838,7 +992,7 @@ export function FeeTypeManager({
                       onChange={(event) =>
                         setForm((current) => ({ ...current, feeCode: event.target.value }))
                       }
-                      placeholder="只能输入数字，最多 8 位"
+                      placeholder="只能输入数字，最大 8 位"
                     />
                   </label>
 
@@ -849,7 +1003,7 @@ export function FeeTypeManager({
                       onChange={(event) =>
                         setForm((current) => ({ ...current, feeName: event.target.value }))
                       }
-                      placeholder="最多 32 个字符"
+                      placeholder="最大 32 个字符"
                     />
                   </label>
 
@@ -907,7 +1061,7 @@ export function FeeTypeManager({
                       onChange={(event) =>
                         setForm((current) => ({ ...current, note: event.target.value }))
                       }
-                      placeholder="最多 256 个字符"
+                      placeholder="最大 256 个字符"
                       rows={4}
                     />
                   </label>
