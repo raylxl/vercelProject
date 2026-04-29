@@ -236,6 +236,18 @@ button {
   color: var(--danger);
 }
 
+.text-link-button {
+  padding: 0;
+  color: var(--accent-dark);
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.text-link-button:hover {
+  text-decoration: underline;
+}
+
 .tool-icon {
   display: inline-flex;
   align-items: center;
@@ -457,6 +469,37 @@ button {
   margin: 24px 0;
 }
 
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 20px;
+  margin: 24px 0;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fcfdff;
+}
+
+.detail-item span {
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.detail-item strong {
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.7;
+  font-weight: 600;
+  word-break: break-word;
+}
+
 .full-span {
   grid-column: 1 / -1;
 }
@@ -488,6 +531,7 @@ button {
 
   .search-grid,
   .modal-form,
+  .detail-grid,
   .quote-grid {
     grid-template-columns: 1fr;
   }

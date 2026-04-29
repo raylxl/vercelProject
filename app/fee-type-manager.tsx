@@ -166,8 +166,9 @@ export function FeeTypeManager({
   const [status, setStatus] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [modalMode, setModalMode] = useState<"create" | "edit" | null>(null);
+  const [modalMode, setModalMode] = useState<"create" | "edit" | "detail" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [detailRow, setDetailRow] = useState<FeeTypeRecord | null>(null);
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
 
   const selectedRows = useMemo(
@@ -229,6 +230,7 @@ export function FeeTypeManager({
   function resetModal() {
     setModalMode(null);
     setEditingId(null);
+    setDetailRow(null);
     setForm(DEFAULT_FORM);
     setSubmitting(false);
   }
@@ -256,6 +258,24 @@ export function FeeTypeManager({
       note: target.note ?? "",
     });
     setModalMode("edit");
+    setStatus("");
+  }
+
+  function openDetailModal(targetRow?: FeeTypeRecord) {
+    const target = targetRow ?? selectedRows[0];
+
+    if (!target) {
+      setStatus("查看前请先且仅选择一条费用类型数据。");
+      return;
+    }
+
+    if (!targetRow && selectedRows.length !== 1) {
+      setStatus("查看前请先且仅选择一条费用类型数据。");
+      return;
+    }
+
+    setDetailRow(target);
+    setModalMode("detail");
     setStatus("");
   }
 
@@ -428,6 +448,10 @@ export function FeeTypeManager({
             <span className="tool-icon">⊕</span>
             新增
           </button>
+          <button type="button" className="tool-button" onClick={() => openDetailModal()}>
+            <span className="tool-icon">◉</span>
+            查看
+          </button>
           <button type="button" className="tool-button" onClick={openEditModal}>
             <span className="tool-icon">✎</span>
             编辑
@@ -498,7 +522,15 @@ export function FeeTypeManager({
                         />
                       </td>
                       <td>{row.feeCode}</td>
-                      <td>{row.feeName}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="text-link-button"
+                          onClick={() => openDetailModal(row)}
+                        >
+                          {row.feeName}
+                        </button>
+                      </td>
                       <td>{row.businessDomain}</td>
                       <td>{row.quoteTypes.join("，") || "-"}</td>
                       <td>{row.note || "-"}</td>
@@ -583,9 +615,15 @@ export function FeeTypeManager({
           <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="fee-type-title">
             <div className="modal-header">
               <div>
-                <p className="modal-kicker">{modalMode === "create" ? "新增" : "编辑"}</p>
+                <p className="modal-kicker">
+                  {modalMode === "create" ? "新增" : modalMode === "edit" ? "编辑" : "详情"}
+                </p>
                 <h2 id="fee-type-title">
-                  {modalMode === "create" ? "新增费用类型" : "编辑费用类型"}
+                  {modalMode === "create"
+                    ? "新增费用类型"
+                    : modalMode === "edit"
+                      ? "编辑费用类型"
+                      : "费用类型详情"}
                 </h2>
               </div>
               <button type="button" className="close-button" onClick={resetModal}>
@@ -593,103 +631,154 @@ export function FeeTypeManager({
               </button>
             </div>
 
-            <div className="modal-form">
-              <label className="form-field">
-                <span>费用编号</span>
-                <input
-                  value={form.feeCode}
-                  disabled={modalMode === "edit"}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, feeCode: event.target.value }))
-                  }
-                  placeholder="只能输入数字，最多 8 位"
-                />
-              </label>
-
-              <label className="form-field">
-                <span>费用名称</span>
-                <input
-                  value={form.feeName}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, feeName: event.target.value }))
-                  }
-                  placeholder="最多 32 个字符"
-                />
-              </label>
-
-              <label className="form-field">
-                <span>所属业务域</span>
-                <select
-                  value={form.businessDomain}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      businessDomain: event.target.value,
-                    }))
-                  }
-                >
-                  <option value="">请选择所属业务域</option>
-                  {BUSINESS_DOMAIN_OPTIONS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="form-field full-span">
-                <span>所属报价</span>
-                <div className="quote-grid">
-                  {QUOTE_TYPE_OPTIONS.map((item) => {
-                    const checked = form.quoteTypes.includes(item.value);
-
-                    return (
-                      <label className="checkbox-option" key={item.value}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            setForm((current) => ({
-                              ...current,
-                              quoteTypes: checked
-                                ? current.quoteTypes.filter((entry) => entry !== item.value)
-                                : [...current.quoteTypes, item.value],
-                            }));
-                          }}
-                        />
-                        <span>{item.label}</span>
-                      </label>
-                    );
-                  })}
+            {modalMode === "detail" && detailRow ? (
+              <>
+                <div className="detail-grid">
+                  <div className="detail-item">
+                    <span>费用编号</span>
+                    <strong>{detailRow.feeCode}</strong>
+                  </div>
+                  <div className="detail-item">
+                    <span>费用名称</span>
+                    <strong>{detailRow.feeName}</strong>
+                  </div>
+                  <div className="detail-item">
+                    <span>所属业务域</span>
+                    <strong>{detailRow.businessDomain}</strong>
+                  </div>
+                  <div className="detail-item">
+                    <span>所属报价</span>
+                    <strong>{detailRow.quoteTypes.join("，") || "-"}</strong>
+                  </div>
+                  <div className="detail-item full-span">
+                    <span>备注</span>
+                    <strong>{detailRow.note || "-"}</strong>
+                  </div>
+                  <div className="detail-item">
+                    <span>创建人</span>
+                    <strong>{detailRow.createdBy}</strong>
+                  </div>
+                  <div className="detail-item">
+                    <span>创建时间</span>
+                    <strong>{formatDateTime(detailRow.createdAt)}</strong>
+                  </div>
+                  <div className="detail-item">
+                    <span>修改人</span>
+                    <strong>{detailRow.updatedBy}</strong>
+                  </div>
+                  <div className="detail-item">
+                    <span>修改时间</span>
+                    <strong>{formatDateTime(detailRow.updatedAt)}</strong>
+                  </div>
                 </div>
-              </div>
 
-              <label className="form-field full-span">
-                <span>备注</span>
-                <textarea
-                  value={form.note}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, note: event.target.value }))
-                  }
-                  placeholder="最多 256 个字符"
-                  rows={4}
-                />
-              </label>
-            </div>
+                <div className="modal-actions">
+                  <button type="button" className="secondary-button" onClick={resetModal}>
+                    关闭
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="modal-form">
+                  <label className="form-field">
+                    <span>费用编号</span>
+                    <input
+                      value={form.feeCode}
+                      disabled={modalMode === "edit"}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, feeCode: event.target.value }))
+                      }
+                      placeholder="只能输入数字，最多 8 位"
+                    />
+                  </label>
 
-            <div className="modal-actions">
-              <button type="button" className="secondary-button" onClick={resetModal}>
-                取消
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                disabled={submitting}
-                onClick={() => void handleSubmit()}
-              >
-                {submitting ? "提交中..." : "保存"}
-              </button>
-            </div>
+                  <label className="form-field">
+                    <span>费用名称</span>
+                    <input
+                      value={form.feeName}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, feeName: event.target.value }))
+                      }
+                      placeholder="最多 32 个字符"
+                    />
+                  </label>
+
+                  <label className="form-field">
+                    <span>所属业务域</span>
+                    <select
+                      value={form.businessDomain}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          businessDomain: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">请选择所属业务域</option>
+                      {BUSINESS_DOMAIN_OPTIONS.map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="form-field full-span">
+                    <span>所属报价</span>
+                    <div className="quote-grid">
+                      {QUOTE_TYPE_OPTIONS.map((item) => {
+                        const checked = form.quoteTypes.includes(item.value);
+
+                        return (
+                          <label className="checkbox-option" key={item.value}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setForm((current) => ({
+                                  ...current,
+                                  quoteTypes: checked
+                                    ? current.quoteTypes.filter((entry) => entry !== item.value)
+                                    : [...current.quoteTypes, item.value],
+                                }));
+                              }}
+                            />
+                            <span>{item.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <label className="form-field full-span">
+                    <span>备注</span>
+                    <textarea
+                      value={form.note}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, note: event.target.value }))
+                      }
+                      placeholder="最多 256 个字符"
+                      rows={4}
+                    />
+                  </label>
+                </div>
+
+                <div className="modal-actions">
+                  <button type="button" className="secondary-button" onClick={resetModal}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={submitting}
+                    onClick={() => void handleSubmit()}
+                  >
+                    {submitting ? "提交中..." : "保存"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : null}
