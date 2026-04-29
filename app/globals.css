@@ -325,6 +325,67 @@ button {
   margin-top: 16px;
 }
 
+.pagination-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.pagination-summary,
+.pagination-controls,
+.page-number-list,
+.page-size-switcher {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pagination-summary {
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.page-size-switcher select {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-dark);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+}
+
+.page-button {
+  min-width: 40px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: #eef3fb;
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.page-button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.page-button:hover {
+  transform: translateY(-1px);
+}
+
+.page-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .status-text {
   margin: 0;
   min-height: 24px;
@@ -432,7 +493,9 @@ button {
   }
 
   .workspace-footer,
-  .modal-actions {
+  .modal-actions,
+  .pagination-bar,
+  .pagination-controls {
     flex-direction: column;
     align-items: stretch;
   }

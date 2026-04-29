@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { SYSTEM_USER_NAME } from "@/lib/fee-type-config";
+import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, SYSTEM_USER_NAME } from "@/lib/fee-type-config";
 import { type FeeTypePayload, validateFeeTypePayload } from "@/lib/fee-type-validation";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
@@ -18,6 +18,16 @@ export async function GET(request: Request) {
     const feeName = searchParams.get("feeName")?.trim() ?? "";
     const businessDomain = searchParams.get("businessDomain")?.trim() ?? "";
     const quoteTypes = parseQuoteTypes(searchParams);
+    const requestedPage = Number.parseInt(searchParams.get("page") ?? "1", 10);
+    const requestedPageSize = Number.parseInt(
+      searchParams.get("pageSize") ?? String(DEFAULT_PAGE_SIZE),
+      10,
+    );
+    const pageSize = PAGE_SIZE_OPTIONS.includes(
+      requestedPageSize as (typeof PAGE_SIZE_OPTIONS)[number],
+    )
+      ? requestedPageSize
+      : DEFAULT_PAGE_SIZE;
 
     const where: Prisma.FeeTypeWhereInput = {
       ...(feeCode
@@ -46,14 +56,26 @@ export async function GET(request: Request) {
         : {}),
     };
 
+    const total = await prisma.feeType.count({ where });
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(Math.max(requestedPage || 1, 1), totalPages);
+
     const feeTypes = await prisma.feeType.findMany({
       where,
       orderBy: {
         feeCode: "asc",
       },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
     });
 
-    return NextResponse.json({ feeTypes });
+    return NextResponse.json({
+      feeTypes,
+      total,
+      page,
+      pageSize,
+      totalPages,
+    });
   } catch (error) {
     console.error("GET /api/fee-types failed", error);
     return NextResponse.json({ error: "查询费用类型失败，请稍后重试。" }, { status: 500 });

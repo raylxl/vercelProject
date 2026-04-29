@@ -12,6 +12,8 @@ export const QUOTE_TYPE_OPTIONS = [
 ] as const;
 
 export const SYSTEM_USER_NAME = "系统用户";
+export const PAGE_SIZE_OPTIONS = [5, 10, 20, 50] as const;
+export const DEFAULT_PAGE_SIZE = 10;
 
 export type BusinessDomain = (typeof BUSINESS_DOMAIN_OPTIONS)[number]["value"];
 export type QuoteType = (typeof QUOTE_TYPE_OPTIONS)[number]["value"];

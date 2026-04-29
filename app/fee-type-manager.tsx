@@ -2,6 +2,8 @@
 
 import {
   BUSINESS_DOMAIN_OPTIONS,
+  DEFAULT_PAGE_SIZE,
+  PAGE_SIZE_OPTIONS,
   QUOTE_TYPE_OPTIONS,
 } from "@/lib/fee-type-config";
 import { type FeeTypePayload } from "@/lib/fee-type-validation";
@@ -27,7 +29,23 @@ type FilterState = {
   quoteTypes: string[];
 };
 
+type PaginationState = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
 type FormState = FeeTypePayload;
+
+type FeeTypeListResponse = {
+  feeTypes?: FeeTypeRecord[];
+  total?: number;
+  page?: number;
+  pageSize?: number;
+  totalPages?: number;
+  error?: string;
+};
 
 const DEFAULT_FILTERS: FilterState = {
   feeCode: "",
@@ -46,6 +64,7 @@ const DEFAULT_FORM: FormState = {
 
 type FeeTypeManagerProps = {
   initialRows: FeeTypeRecord[];
+  initialPagination: PaginationState;
   databaseReady: boolean;
 };
 
@@ -55,7 +74,7 @@ function formatDateTime(value: string | Date) {
   });
 }
 
-function buildQuery(filters: FilterState) {
+function buildQuery(filters: FilterState, page: number, pageSize: number) {
   const params = new URLSearchParams();
 
   if (filters.feeCode.trim()) {
@@ -74,8 +93,10 @@ function buildQuery(filters: FilterState) {
     params.append("quoteType", item);
   });
 
-  const queryString = params.toString();
-  return queryString ? `?${queryString}` : "";
+  params.set("page", String(page));
+  params.set("pageSize", String(pageSize));
+
+  return `?${params.toString()}`;
 }
 
 function QuoteTypeDropdown({
@@ -121,9 +142,26 @@ function QuoteTypeDropdown({
   );
 }
 
-export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerProps) {
+function getVisiblePages(totalPages: number, currentPage: number) {
+  if (totalPages <= 5) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const start = Math.max(1, currentPage - 2);
+  const end = Math.min(totalPages, start + 4);
+  const normalizedStart = Math.max(1, end - 4);
+
+  return Array.from({ length: end - normalizedStart + 1 }, (_, index) => normalizedStart + index);
+}
+
+export function FeeTypeManager({
+  initialRows,
+  initialPagination,
+  databaseReady,
+}: FeeTypeManagerProps) {
   const [rows, setRows] = useState(initialRows);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  const [pagination, setPagination] = useState<PaginationState>(initialPagination);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [status, setStatus] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -137,28 +175,48 @@ export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerPro
     [rows, selectedIds],
   );
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedIds.includes(row.id));
+  const visiblePages = getVisiblePages(pagination.totalPages, pagination.page);
 
-  async function loadRows(nextFilters: FilterState, successMessage?: string) {
+  async function loadRows(
+    nextFilters: FilterState,
+    nextPage: number,
+    nextPageSize: number,
+    successMessage?: string,
+  ) {
     setLoading(true);
 
     try {
-      const response = await fetch(`/api/fee-types${buildQuery(nextFilters)}`, {
+      const response = await fetch(`/api/fee-types${buildQuery(nextFilters, nextPage, nextPageSize)}`, {
         method: "GET",
       });
-      const data = (await response.json()) as {
-        feeTypes?: FeeTypeRecord[];
-        error?: string;
-      };
+      const data = (await response.json()) as FeeTypeListResponse;
 
-      if (!response.ok || !data.feeTypes) {
+      if (
+        !response.ok ||
+        !data.feeTypes ||
+        typeof data.total !== "number" ||
+        typeof data.page !== "number" ||
+        typeof data.pageSize !== "number" ||
+        typeof data.totalPages !== "number"
+      ) {
         throw new Error(data.error ?? "查询失败，请稍后重试。");
       }
 
       const nextRows = data.feeTypes;
+      const nextTotal = data.total;
+      const resolvedPage = data.page;
+      const resolvedPageSize = data.pageSize;
+      const resolvedTotalPages = data.totalPages;
 
       startTransition(() => {
         setRows(nextRows);
         setSelectedIds([]);
+        setPagination({
+          total: nextTotal,
+          page: resolvedPage,
+          pageSize: resolvedPageSize,
+          totalPages: resolvedTotalPages,
+        });
         setStatus(successMessage ?? "");
       });
     } catch (error) {
@@ -229,6 +287,8 @@ export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerPro
       resetModal();
       await loadRows(
         filters,
+        modalMode === "create" ? 1 : pagination.page,
+        pagination.pageSize,
         modalMode === "create" ? "费用类型新增成功。" : "费用类型编辑成功。",
       );
     } catch (error) {
@@ -264,7 +324,12 @@ export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerPro
         throw new Error(data.error ?? "删除失败，请稍后重试。");
       }
 
-      await loadRows(filters, `已删除 ${data.deletedCount ?? selectedIds.length} 条费用类型数据。`);
+      await loadRows(
+        filters,
+        pagination.page,
+        pagination.pageSize,
+        `已删除 ${data.deletedCount ?? selectedIds.length} 条费用类型数据。`,
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "删除失败，请稍后重试。");
       setLoading(false);
@@ -277,7 +342,7 @@ export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerPro
         <p className="page-index">1、新增费用类型维护页面</p>
         <div>
           <h1>费用类型维护</h1>
-          <p>支持查询、新增、编辑和批量删除，字段规则与页面原型保持一致。</p>
+          <p>支持查询、新增、编辑、批量删除，以及分页和每页条数切换。</p>
         </div>
       </section>
 
@@ -341,7 +406,7 @@ export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerPro
               type="button"
               className="primary-button"
               disabled={loading}
-              onClick={() => void loadRows(filters, "查询完成。")}
+              onClick={() => void loadRows(filters, 1, pagination.pageSize, "查询完成。")}
             >
               {loading ? "查询中..." : "查询"}
             </button>
@@ -350,7 +415,7 @@ export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerPro
               className="secondary-button"
               onClick={() => {
                 setFilters(DEFAULT_FILTERS);
-                void loadRows(DEFAULT_FILTERS, "已重置查询条件。");
+                void loadRows(DEFAULT_FILTERS, 1, DEFAULT_PAGE_SIZE, "已重置查询条件。");
               }}
             >
               重置
@@ -414,10 +479,11 @@ export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerPro
               ) : (
                 rows.map((row, index) => {
                   const checked = selectedIds.includes(row.id);
+                  const sequence = (pagination.page - 1) * pagination.pageSize + index + 1;
 
                   return (
                     <tr key={row.id}>
-                      <td>{index + 1}</td>
+                      <td>{sequence}</td>
                       <td className="checkbox-cell">
                         <input
                           type="checkbox"
@@ -448,11 +514,66 @@ export function FeeTypeManager({ initialRows, databaseReady }: FeeTypeManagerPro
           </table>
         </div>
 
+        <div className="pagination-bar">
+          <div className="pagination-summary">
+            <span>共 {pagination.total} 条</span>
+            <label className="page-size-switcher">
+              <span>每页</span>
+              <select
+                value={pagination.pageSize}
+                onChange={(event) => {
+                  const nextPageSize = Number(event.target.value);
+                  void loadRows(filters, 1, nextPageSize, `已切换为每页 ${nextPageSize} 条。`);
+                }}
+              >
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>
+                    {size} 条
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="pagination-controls">
+            <button
+              type="button"
+              className="page-button"
+              disabled={loading || pagination.page <= 1}
+              onClick={() => void loadRows(filters, pagination.page - 1, pagination.pageSize)}
+            >
+              上一页
+            </button>
+
+            <div className="page-number-list">
+              {visiblePages.map((pageNumber) => (
+                <button
+                  type="button"
+                  key={pageNumber}
+                  className={`page-button${pageNumber === pagination.page ? " active" : ""}`}
+                  disabled={loading}
+                  onClick={() => void loadRows(filters, pageNumber, pagination.pageSize)}
+                >
+                  {pageNumber}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              className="page-button"
+              disabled={loading || pagination.page >= pagination.totalPages}
+              onClick={() => void loadRows(filters, pagination.page + 1, pagination.pageSize)}
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+
         <div className="workspace-footer">
           <p className={`status-text${status ? " visible" : ""}`}>{status || " "}</p>
           <p className="footnote">
-            新增时费用编号必填且最多 8 位数字；编辑时费用编号不可修改；所属报价支持多选；
-            删除支持批量处理。
+            当前第 {pagination.page} / {pagination.totalPages} 页。新增后默认回到第一页，删除后会自动修正页码。
           </p>
         </div>
       </section>
