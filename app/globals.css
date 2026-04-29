@@ -1,16 +1,19 @@
 :root {
   color-scheme: light;
-  --bg: #eef3f9;
+  --bg: #f3f9fe;
   --card: #ffffff;
-  --card-soft: #f8fbff;
-  --line: #d5deea;
-  --line-dark: #a7b6c8;
-  --text: #1d2b3a;
-  --muted: #657487;
-  --accent: #2463eb;
-  --accent-dark: #1648b8;
+  --card-soft: #f7fcff;
+  --line: #dce8f2;
+  --line-dark: #bfd7e4;
+  --text: rgba(0, 0, 0, 0.8);
+  --muted: #7b8da1;
+  --accent: #00b9b9;
+  --accent-dark: #009494;
+  --accent-deep: #004d72;
+  --accent-soft: #e6f8f8;
+  --accent-soft-2: #ccf1f1;
   --danger: #d93d43;
-  --shadow: 0 18px 50px rgba(21, 45, 84, 0.08);
+  --shadow: 0 12px 32px 4px rgba(0, 0, 0, 0.04), 0 8px 20px rgba(0, 0, 0, 0.08);
 }
 
 * {
@@ -26,8 +29,8 @@ body {
   min-height: 100vh;
   color: var(--text);
   background:
-    linear-gradient(180deg, rgba(36, 99, 235, 0.06) 0%, rgba(238, 243, 249, 0) 240px),
-    linear-gradient(180deg, #f7fafe 0%, var(--bg) 100%);
+    linear-gradient(180deg, rgba(1, 190, 190, 0.08) 0%, rgba(243, 249, 254, 0) 200px),
+    linear-gradient(180deg, #f7fbff 0%, var(--bg) 100%);
 }
 
 code {
@@ -46,15 +49,19 @@ button {
 }
 
 .admin-shell {
-  width: min(1520px, calc(100% - 40px));
+  width: min(1600px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 20px 0 60px;
+  padding: 16px 0 40px;
 }
 
 .admin-heading {
   display: grid;
-  gap: 8px;
-  margin-bottom: 22px;
+  gap: 0;
+  margin-bottom: 18px;
+  overflow: hidden;
+  border-radius: 20px;
+  background: linear-gradient(90deg, #01bebe 0%, #004d72 100%);
+  box-shadow: var(--shadow);
 }
 
 .heading-row {
@@ -62,45 +69,51 @@ button {
   justify-content: space-between;
   gap: 24px;
   align-items: flex-start;
+  padding: 22px 24px;
 }
 
 .page-index {
   margin: 0;
-  color: var(--muted);
-  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.92rem;
+  padding: 14px 24px 0;
 }
 
 .admin-heading h1 {
   margin: 0;
-  font-size: clamp(2rem, 4vw, 3.2rem);
-  letter-spacing: -0.04em;
+  color: #fff;
+  font-size: clamp(1.8rem, 3vw, 2.7rem);
+  letter-spacing: -0.03em;
 }
 
 .admin-heading p:last-child {
   margin: 0;
-  color: var(--muted);
-  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.86);
+  line-height: 1.65;
+  margin-top: 10px;
 }
 
 .workspace-card {
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 24px;
+  border: 1px solid rgba(0, 158, 191, 0.12);
+  border-radius: 16px;
   box-shadow: var(--shadow);
-  padding: 28px;
+  padding: 22px 24px;
 }
 
 .session-panel,
 .log-card {
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 16px;
   box-shadow: var(--shadow);
 }
 
 .session-panel {
   min-width: 360px;
-  padding: 18px 20px;
+  padding: 16px 18px;
+  background: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(8px);
 }
 
 .session-title {
@@ -112,13 +125,14 @@ button {
 
 .session-title span,
 .log-kicker {
-  color: var(--muted);
+  color: rgba(255, 255, 255, 0.72);
   font-size: 0.9rem;
   font-weight: 600;
 }
 
 .session-title strong {
-  font-size: 1.2rem;
+  font-size: 1.08rem;
+  color: #fff;
 }
 
 .session-form {
@@ -130,16 +144,16 @@ button {
   min-height: 44px;
   flex: 1;
   padding: 10px 14px;
-  border: 1px solid var(--line-dark);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 12px;
   outline: none;
-  background: #fff;
-  color: var(--text);
+  background: rgba(255, 255, 255, 0.96);
+  color: rgba(0, 0, 0, 0.8);
 }
 
 .session-form input:focus {
-  border-color: rgba(36, 99, 235, 0.58);
-  box-shadow: 0 0 0 4px rgba(36, 99, 235, 0.12);
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.14);
 }
 
 .search-grid {
@@ -174,8 +188,8 @@ button {
   min-height: 44px;
   width: 100%;
   padding: 10px 14px;
-  border: 1px solid var(--line-dark);
-  border-radius: 12px;
+  border: 1px solid #d9e5ee;
+  border-radius: 8px;
   outline: none;
   background: #fff;
   color: var(--text);
@@ -188,8 +202,8 @@ button {
 .form-field textarea:focus,
 .multi-select[open] summary,
 .multi-select summary:focus {
-  border-color: rgba(36, 99, 235, 0.58);
-  box-shadow: 0 0 0 4px rgba(36, 99, 235, 0.12);
+  border-color: rgba(0, 185, 185, 0.58);
+  box-shadow: 0 0 0 4px rgba(0, 185, 185, 0.12);
 }
 
 .multi-select {
@@ -226,8 +240,8 @@ button {
   width: 100%;
   min-width: 220px;
   padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  border: 1px solid #d9e5ee;
+  border-radius: 10px;
   background: var(--card);
   box-shadow: var(--shadow);
 }
@@ -255,7 +269,7 @@ button {
 .secondary-button,
 .tool-button,
 .close-button {
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
   transition:
     transform 120ms ease,
@@ -273,26 +287,30 @@ button {
 
 .primary-button {
   color: #fff;
-  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+  background: var(--accent);
 }
 
 .secondary-button {
   color: var(--text);
-  background: #eef3fb;
+  background: #fff;
+  border: 1px solid #d9e5ee;
 }
 
 .tool-button {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 0;
+  padding: 8px 12px;
   color: var(--text);
-  background: transparent;
-  font-size: 1rem;
+  background: #fff;
+  border: 1px solid #d9e5ee;
+  font-size: 0.96rem;
 }
 
 .tool-button.danger {
   color: var(--danger);
+  background: #fff6f6;
+  border-color: #f3cccc;
 }
 
 .text-link-button {
@@ -311,15 +329,17 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  background: #eef3fb;
-  font-size: 1.05rem;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  font-size: 0.92rem;
 }
 
 .tool-button.danger .tool-icon {
   background: rgba(217, 61, 67, 0.12);
+  color: var(--danger);
 }
 
 .primary-button:hover,
@@ -339,13 +359,15 @@ button {
   display: flex;
   gap: 28px;
   align-items: center;
-  margin: 26px 0 18px;
+  margin: 18px 0 16px;
+  padding: 14px 0 6px;
 }
 
 .table-shell {
   overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 16px;
+  border: 1px solid #d9e5ee;
+  border-radius: 12px;
+  background: #fff;
 }
 
 .data-table {
@@ -357,9 +379,9 @@ button {
 
 .data-table th,
 .data-table td {
-  padding: 14px 12px;
-  border-bottom: 1px solid var(--line);
-  border-right: 1px solid var(--line);
+  padding: 13px 12px;
+  border-bottom: 1px solid #e8eff5;
+  border-right: 1px solid #eef4f8;
   text-align: center;
   font-size: 0.94rem;
 }
@@ -370,13 +392,13 @@ button {
 }
 
 .data-table thead th {
-  background: var(--card-soft);
+  background: #f7fbff;
   color: var(--text);
   font-weight: 700;
 }
 
 .data-table tbody tr:hover {
-  background: rgba(36, 99, 235, 0.04);
+  background: #e6f9f9;
 }
 
 .checkbox-cell {
@@ -421,8 +443,8 @@ button {
 .page-size-switcher select {
   min-height: 40px;
   padding: 8px 12px;
-  border: 1px solid var(--line-dark);
-  border-radius: 10px;
+  border: 1px solid #d9e5ee;
+  border-radius: 8px;
   background: #fff;
   color: var(--text);
 }
@@ -431,8 +453,9 @@ button {
   min-width: 40px;
   height: 40px;
   padding: 0 14px;
-  border-radius: 10px;
-  background: #eef3fb;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #d9e5ee;
   color: var(--text);
   cursor: pointer;
   transition:
@@ -444,6 +467,7 @@ button {
 
 .page-button.active {
   background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
 }
 
@@ -476,7 +500,8 @@ button {
 
 .log-card {
   margin-top: 22px;
-  padding: 24px 28px;
+  padding: 22px 24px;
+  border: 1px solid rgba(0, 158, 191, 0.12);
 }
 
 .log-header {
@@ -508,16 +533,16 @@ button {
   gap: 14px;
   align-items: start;
   padding: 16px 18px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: #fcfdff;
+  border: 1px solid #e6f0f6;
+  border-radius: 12px;
+  background: #fbfeff;
 }
 
 .log-badge {
   min-width: 52px;
   padding: 8px 10px;
   border-radius: 999px;
-  background: #eef3fb;
+  background: var(--accent-soft);
   color: var(--accent-dark);
   text-align: center;
   font-size: 0.88rem;
@@ -551,10 +576,10 @@ button {
 
 .modal-card {
   width: min(760px, 100%);
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 16px;
+  border: 1px solid rgba(0, 158, 191, 0.16);
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 28px 64px rgba(14, 24, 40, 0.22);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.14);
   padding: 24px;
 }
 
@@ -582,7 +607,7 @@ button {
   width: 38px;
   height: 38px;
   color: var(--text);
-  background: #eef3fb;
+  background: var(--accent-soft);
   font-size: 1.5rem;
 }
 
@@ -605,9 +630,9 @@ button {
   flex-direction: column;
   gap: 10px;
   padding: 16px 18px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: #fcfdff;
+  border: 1px solid #e6f0f6;
+  border-radius: 12px;
+  background: #fbfeff;
 }
 
 .detail-item span {
@@ -638,9 +663,9 @@ button {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px 14px;
   padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: #fcfdff;
+  border: 1px solid #e6f0f6;
+  border-radius: 10px;
+  background: #fbfeff;
 }
 
 @media (max-width: 900px) {
