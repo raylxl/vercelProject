@@ -6,11 +6,22 @@ import {
   DEFAULT_PAGE_SIZE,
   PAGE_SIZE_OPTIONS,
 } from "@/lib/fee-type-config";
-import { getOperatorNameFromSession } from "@/lib/operator-session";
+import {
+  getOperatorNameFromSession,
+  isAuthenticated,
+} from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
 import { type FeeTypePayload, validateFeeTypePayload } from "@/lib/fee-type-validation";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
+
+async function ensureAuthenticated() {
+  if (!(await isAuthenticated())) {
+    return NextResponse.json({ error: "请先登录后再访问。" }, { status: 401 });
+  }
+
+  return null;
+}
 
 function parseQuoteTypes(searchParams: URLSearchParams) {
   return searchParams
@@ -21,6 +32,12 @@ function parseQuoteTypes(searchParams: URLSearchParams) {
 
 export async function GET(request: Request) {
   try {
+    const unauthorizedResponse = await ensureAuthenticated();
+
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
+
     const { searchParams } = new URL(request.url);
     const feeCode = searchParams.get("feeCode")?.trim() ?? "";
     const feeName = searchParams.get("feeName")?.trim() ?? "";
@@ -92,6 +109,12 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const unauthorizedResponse = await ensureAuthenticated();
+
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
+
     const payload = (await request.json()) as FeeTypePayload;
     const validation = validateFeeTypePayload(payload);
 
@@ -141,6 +164,12 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const unauthorizedResponse = await ensureAuthenticated();
+
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
+
     const body = (await request.json()) as { ids?: string[] };
     const ids = Array.from(new Set(body.ids?.filter(Boolean) ?? []));
 

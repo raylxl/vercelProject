@@ -1,9 +1,14 @@
 import { OPERATION_LOG_TAKE } from "@/lib/fee-type-config";
+import { isAuthenticated } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
   try {
+    if (!(await isAuthenticated())) {
+      return NextResponse.json({ error: "请先登录后再访问。" }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const requestedTake = Number.parseInt(
       searchParams.get("take") ?? String(OPERATION_LOG_TAKE),

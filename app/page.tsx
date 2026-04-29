@@ -1,16 +1,16 @@
+import { DEFAULT_PAGE_SIZE, OPERATION_LOG_TAKE } from "@/lib/fee-type-config";
 import {
-  DEFAULT_PAGE_SIZE,
-  OPERATION_LOG_TAKE,
-} from "@/lib/fee-type-config";
-import { getOperatorNameFromSession } from "@/lib/operator-session";
+  getOperatorNameFromSession,
+  isAuthenticated,
+} from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
 import { FeeTypeManager } from "./fee-type-manager";
 
 export const dynamic = "force-dynamic";
 
-async function getFeeTypePage() {
+async function getFeeTypePage(operatorName: string) {
   try {
-    const [feeTypes, total, operationLogs, operatorName] = await Promise.all([
+    const [feeTypes, total, operationLogs] = await Promise.all([
       prisma.feeType.findMany({
         orderBy: {
           feeCode: "asc",
@@ -24,7 +24,6 @@ async function getFeeTypePage() {
         },
         take: OPERATION_LOG_TAKE,
       }),
-      getOperatorNameFromSession(),
     ]);
 
     return {
@@ -45,13 +44,16 @@ async function getFeeTypePage() {
 }
 
 export default async function HomePage() {
-  const pageData = await getFeeTypePage();
+  const authenticated = await isAuthenticated();
+  const operatorName = authenticated ? await getOperatorNameFromSession() : "";
+  const pageData = authenticated ? await getFeeTypePage(operatorName) : null;
 
   return (
     <FeeTypeManager
+      isAuthenticated={authenticated}
       initialRows={pageData?.feeTypes ?? []}
       initialOperationLogs={pageData?.operationLogs ?? []}
-      initialOperatorName={pageData?.operatorName ?? "系统用户"}
+      initialOperatorName={pageData?.operatorName ?? operatorName}
       initialPagination={
         pageData?.pagination ?? {
           total: 0,
@@ -60,7 +62,7 @@ export default async function HomePage() {
           totalPages: 1,
         }
       }
-      databaseReady={pageData !== null}
+      databaseReady={authenticated ? pageData !== null : true}
     />
   );
 }

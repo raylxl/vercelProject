@@ -7,6 +7,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model UserAccount {
+  id           String   @id @default(cuid())
+  username     String   @unique @db.VarChar(8)
+  passwordHash String   @db.VarChar(200)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 model Message {
   id        Int      @id @default(autoincrement())
   content   String

@@ -1,5 +1,8 @@
 import { buildUpdateSummary } from "@/lib/fee-type-operation-log";
-import { getOperatorNameFromSession } from "@/lib/operator-session";
+import {
+  getOperatorNameFromSession,
+  isAuthenticated,
+} from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
 import { type FeeTypePayload, validateFeeTypePayload } from "@/lib/fee-type-validation";
 import { Prisma } from "@prisma/client";
@@ -10,6 +13,10 @@ export async function PUT(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    if (!(await isAuthenticated())) {
+      return NextResponse.json({ error: "请先登录后再访问。" }, { status: 401 });
+    }
+
     const { id } = await context.params;
     const payload = (await request.json()) as FeeTypePayload;
     const validation = validateFeeTypePayload(payload);

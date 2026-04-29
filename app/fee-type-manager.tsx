@@ -1,6 +1,11 @@
 "use client";
 
 import {
+  ACCOUNT_NAME_MAX_LENGTH,
+  ADMIN_USERNAME,
+  PASSWORD_MAX_LENGTH,
+} from "@/lib/account-rules";
+import {
   BUSINESS_DOMAIN_OPTIONS,
   DEFAULT_PAGE_SIZE,
   OPERATION_LOG_TAKE,
@@ -64,6 +69,13 @@ type OperationLogResponse = {
   error?: string;
 };
 
+type SidebarMenuItem = {
+  label: string;
+  page?: "fee-type-manager";
+  placeholder?: boolean;
+  children?: SidebarMenuItem[];
+};
+
 const DEFAULT_FILTERS: FilterState = {
   feeCode: "",
   feeName: "",
@@ -88,13 +100,6 @@ const TOP_NAV_ITEMS = [
   "待办",
   "消息",
 ] as const;
-
-type SidebarMenuItem = {
-  label: string;
-  page?: "fee-type-manager";
-  placeholder?: boolean;
-  children?: SidebarMenuItem[];
-};
 
 const SIDEBAR_MENUS: SidebarMenuItem[] = [
   {
@@ -130,9 +135,10 @@ const SIDEBAR_MENUS: SidebarMenuItem[] = [
     label: "数据预警",
     children: [{ label: "暂无数据", placeholder: true }],
   },
-] as const;
+];
 
 type FeeTypeManagerProps = {
+  isAuthenticated: boolean;
   initialRows: FeeTypeRecord[];
   initialOperationLogs: FeeTypeOperationLogRecord[];
   initialOperatorName: string;
@@ -144,6 +150,10 @@ function formatDateTime(value: string | Date) {
   return new Date(value).toLocaleString("zh-CN", {
     hour12: false,
   });
+}
+
+function limitCharacterLength(value: string, maxLength: number) {
+  return Array.from(value).slice(0, maxLength).join("");
 }
 
 function buildQuery(filters: FilterState, page: number, pageSize: number) {
@@ -169,6 +179,74 @@ function buildQuery(filters: FilterState, page: number, pageSize: number) {
   params.set("pageSize", String(pageSize));
 
   return `?${params.toString()}`;
+}
+
+function getVisiblePages(totalPages: number, currentPage: number) {
+  if (totalPages <= 5) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const start = Math.max(1, currentPage - 2);
+  const end = Math.min(totalPages, start + 4);
+  const normalizedStart = Math.max(1, end - 4);
+
+  return Array.from(
+    { length: end - normalizedStart + 1 },
+    (_, index) => normalizedStart + index,
+  );
+}
+
+function getOperationLabel(operationType: string) {
+  switch (operationType) {
+    case "CREATE":
+      return "新增";
+    case "UPDATE":
+      return "编辑";
+    case "DELETE":
+      return "删除";
+    default:
+      return operationType;
+  }
+}
+
+function filterSidebarMenus(items: SidebarMenuItem[], keyword: string): SidebarMenuItem[] {
+  if (!keyword.trim()) {
+    return items;
+  }
+
+  const normalizedKeyword = keyword.trim();
+
+  return items.reduce<SidebarMenuItem[]>((result, item) => {
+    const filteredChildren = item.children
+      ? filterSidebarMenus(item.children, normalizedKeyword)
+      : undefined;
+
+    if (item.label.includes(normalizedKeyword)) {
+      result.push({
+        ...item,
+        children: item.children,
+      });
+
+      return result;
+    }
+
+    if (filteredChildren && filteredChildren.length > 0) {
+      result.push({
+        ...item,
+        children: filteredChildren,
+      });
+    }
+
+    return result;
+  }, []);
+}
+
+function hasPageInTree(item: SidebarMenuItem, page: "fee-type-manager"): boolean {
+  if (item.page === page) {
+    return true;
+  }
+
+  return item.children?.some((child) => hasPageInTree(child, page)) ?? false;
 }
 
 function QuoteTypeDropdown({
@@ -214,75 +292,8 @@ function QuoteTypeDropdown({
   );
 }
 
-function getVisiblePages(totalPages: number, currentPage: number) {
-  if (totalPages <= 5) {
-    return Array.from({ length: totalPages }, (_, index) => index + 1);
-  }
-
-  const start = Math.max(1, currentPage - 2);
-  const end = Math.min(totalPages, start + 4);
-  const normalizedStart = Math.max(1, end - 4);
-
-  return Array.from(
-    { length: end - normalizedStart + 1 },
-    (_, index) => normalizedStart + index,
-  );
-}
-
-function getOperationLabel(operationType: string) {
-  switch (operationType) {
-    case "CREATE":
-      return "新增";
-    case "UPDATE":
-      return "编辑";
-    case "DELETE":
-      return "删除";
-    default:
-      return operationType;
-  }
-}
-
-function filterSidebarMenus(items: SidebarMenuItem[], keyword: string): SidebarMenuItem[] {
-  if (!keyword.trim()) {
-    return items;
-  }
-
-  const normalizedKeyword = keyword.trim();
-
-  return items.reduce<SidebarMenuItem[]>((result, item) => {
-      const filteredChildren = item.children
-        ? filterSidebarMenus(item.children, normalizedKeyword)
-        : undefined;
-
-      if (item.label.includes(normalizedKeyword)) {
-        result.push({
-          ...item,
-          children: item.children,
-        });
-        return result;
-      }
-
-      if (filteredChildren && filteredChildren.length > 0) {
-        result.push({
-          ...item,
-          children: filteredChildren,
-        });
-        return result;
-      }
-
-      return result;
-    }, []);
-}
-
-function hasPageInTree(item: SidebarMenuItem, page: "fee-type-manager"): boolean {
-  if (item.page === page) {
-    return true;
-  }
-
-  return item.children?.some((child) => hasPageInTree(child, page)) ?? false;
-}
-
 export function FeeTypeManager({
+  isAuthenticated,
   initialRows,
   initialOperationLogs,
   initialOperatorName,
@@ -291,15 +302,14 @@ export function FeeTypeManager({
 }: FeeTypeManagerProps) {
   const [rows, setRows] = useState(initialRows);
   const [operationLogs, setOperationLogs] = useState(initialOperationLogs);
-  const [operatorName, setOperatorName] = useState(initialOperatorName);
-  const [operatorDraft, setOperatorDraft] = useState(initialOperatorName);
+  const [operatorName] = useState(initialOperatorName);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [pagination, setPagination] = useState<PaginationState>(initialPagination);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [status, setStatus] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [sessionSaving, setSessionSaving] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [sidebarKeyword, setSidebarKeyword] = useState("");
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
     "财务管理",
@@ -310,6 +320,11 @@ export function FeeTypeManager({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [detailRow, setDetailRow] = useState<FeeTypeRecord | null>(null);
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
+  const [loginForm, setLoginForm] = useState({
+    username: "",
+    password: "",
+  });
+  const [loginStatus, setLoginStatus] = useState("");
 
   const selectedRows = useMemo(
     () => rows.filter((row) => selectedIds.includes(row.id)),
@@ -317,13 +332,14 @@ export function FeeTypeManager({
   );
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedIds.includes(row.id));
   const visiblePages = getVisiblePages(pagination.totalPages, pagination.page);
+  const latestOperation = operationLogs[0];
+  const accountRoleLabel = operatorName === ADMIN_USERNAME ? "管理员账号" : "注册账号";
   const activeFilterCount = [
     filters.feeCode.trim(),
     filters.feeName.trim(),
     filters.businessDomain,
     filters.quoteTypes.length > 0 ? "quoteTypes" : "",
   ].filter(Boolean).length;
-  const latestOperation = operationLogs[0];
 
   const filteredMenus = useMemo(
     () => filterSidebarMenus(SIDEBAR_MENUS, sidebarKeyword),
@@ -367,6 +383,77 @@ export function FeeTypeManager({
     ],
   );
 
+  async function handleLogin() {
+    setAuthSubmitting(true);
+    setLoginStatus("");
+
+    try {
+      const response = await fetch("/api/session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(loginForm),
+      });
+      const data = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "登录失败，请稍后重试。");
+      }
+
+      window.location.reload();
+    } catch (error) {
+      setLoginStatus(error instanceof Error ? error.message : "登录失败，请稍后重试。");
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleRegister() {
+    setAuthSubmitting(true);
+    setLoginStatus("");
+
+    try {
+      const response = await fetch("/api/session", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(loginForm),
+      });
+      const data = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "注册失败，请稍后重试。");
+      }
+
+      window.location.reload();
+    } catch (error) {
+      setLoginStatus(error instanceof Error ? error.message : "注册失败，请稍后重试。");
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleLogout() {
+    setAuthSubmitting(true);
+    setStatus("");
+
+    try {
+      const response = await fetch("/api/session", {
+        method: "DELETE",
+      });
+      const data = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "退出登录失败，请稍后重试。");
+      }
+
+      window.location.reload();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "退出登录失败，请稍后重试。");
+      setAuthSubmitting(false);
+    }
+  }
+
   async function loadOperationLogs() {
     const response = await fetch(`/api/fee-type-operation-logs?take=${OPERATION_LOG_TAKE}`);
     const data = (await response.json()) as OperationLogResponse;
@@ -401,9 +488,6 @@ export function FeeTypeManager({
     try {
       const response = await fetch(
         `/api/fee-types${buildQuery(nextFilters, nextPage, nextPageSize)}`,
-        {
-          method: "GET",
-        },
       );
       const data = (await response.json()) as FeeTypeListResponse;
 
@@ -418,14 +502,20 @@ export function FeeTypeManager({
         throw new Error(data.error ?? "查询失败，请稍后重试。");
       }
 
+      const feeTypes = data.feeTypes;
+      const total = data.total;
+      const page = data.page;
+      const pageSize = data.pageSize;
+      const totalPages = data.totalPages;
+
       startTransition(() => {
-        setRows(data.feeTypes ?? []);
+        setRows(feeTypes);
         setSelectedIds([]);
         setPagination({
-          total: data.total ?? 0,
-          page: data.page ?? 1,
-          pageSize: data.pageSize ?? DEFAULT_PAGE_SIZE,
-          totalPages: data.totalPages ?? 1,
+          total,
+          page,
+          pageSize,
+          totalPages,
         });
         setStatus(successMessage ?? "");
       });
@@ -565,33 +655,6 @@ export function FeeTypeManager({
     setStatus("");
   }
 
-  async function handleOperatorSave() {
-    setSessionSaving(true);
-
-    try {
-      const response = await fetch("/api/session", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ operatorName: operatorDraft }),
-      });
-      const data = (await response.json()) as { operatorName?: string; error?: string };
-
-      if (!response.ok || !data.operatorName) {
-        throw new Error(data.error ?? "切换登录人失败，请稍后重试。");
-      }
-
-      setOperatorName(data.operatorName);
-      setOperatorDraft(data.operatorName);
-      setStatus(`当前登录人已切换为 ${data.operatorName}。`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "切换登录人失败，请稍后重试。");
-    } finally {
-      setSessionSaving(false);
-    }
-  }
-
   async function handleSubmit() {
     if (!modalMode) {
       return;
@@ -663,6 +726,96 @@ export function FeeTypeManager({
     }
   }
 
+  if (!isAuthenticated) {
+    return (
+      <main className="login-shell">
+        <section className="login-card">
+          <div className="login-brand">
+            <div className="brand-logo">ZT</div>
+            <div className="brand-copy">
+              <strong>费用类型维护后台</strong>
+              <span>管理员登录后可访问费用类型管理与日志</span>
+            </div>
+          </div>
+
+          <div className="login-copy">
+            <p className="section-kicker">Account Access</p>
+            <h1>登录或注册账号</h1>
+            <p>
+              支持管理员账号和普通注册账号登录。账户名最多 {ACCOUNT_NAME_MAX_LENGTH} 位，
+              密码仅支持 {PASSWORD_MAX_LENGTH} 位以内数字。
+            </p>
+          </div>
+
+          <div className="login-form">
+            <label className="form-field">
+              <span>账户名</span>
+              <input
+                value={loginForm.username}
+                onChange={(event) =>
+                  setLoginForm((current) => ({
+                    ...current,
+                    username: limitCharacterLength(event.target.value, ACCOUNT_NAME_MAX_LENGTH),
+                  }))
+                }
+                maxLength={ACCOUNT_NAME_MAX_LENGTH}
+                placeholder="请输入账户名"
+              />
+            </label>
+
+            <label className="form-field">
+              <span>密码</span>
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(event) =>
+                  setLoginForm((current) => ({
+                    ...current,
+                    password: event.target.value.replace(/\D/g, "").slice(0, PASSWORD_MAX_LENGTH),
+                  }))
+                }
+                inputMode="numeric"
+                maxLength={PASSWORD_MAX_LENGTH}
+                placeholder="请输入数字密码"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleLogin();
+                  }
+                }}
+              />
+            </label>
+
+            <p className="login-helper">
+              普通账号可直接注册并自动登录，`admin / 1234` 仍可作为管理员账号使用。
+            </p>
+
+            <div className="login-actions">
+              <button
+                type="button"
+                className="primary-button login-button"
+                disabled={authSubmitting}
+                onClick={() => void handleLogin()}
+              >
+                {authSubmitting ? "提交中..." : "登录"}
+              </button>
+              <button
+                type="button"
+                className="secondary-button login-button"
+                disabled={authSubmitting}
+                onClick={() => void handleRegister()}
+              >
+                {authSubmitting ? "提交中..." : "注册并登录"}
+              </button>
+            </div>
+
+            <p className={`login-status${loginStatus ? " visible" : ""}`}>{loginStatus || " "}</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="dashboard-shell">
       <aside className="dashboard-sidebar">
@@ -696,10 +849,10 @@ export function FeeTypeManager({
 
         <div className="sidebar-env-card">
           <div>
-            <strong>预发环境</strong>
-            <span>当前界面按公司工作台风格改造</span>
+            <strong>管理员模式</strong>
+            <span>当前账号已登录，可维护费用类型、查看日志并执行增删改查。</span>
           </div>
-          <span className="env-toggle" />
+          <span className="env-toggle active" />
         </div>
       </aside>
 
@@ -718,10 +871,15 @@ export function FeeTypeManager({
           </div>
 
           <div className="global-topbar-tools">
-            <span className="global-pill">待办 31</span>
-            <span className="global-pill alert">消息 99+</span>
-            <button type="button" className="user-chip">
-              {operatorName}
+            <span className="global-pill">{accountRoleLabel}</span>
+            <span className="global-pill alert">已登录</span>
+            <button
+              type="button"
+              className="user-chip"
+              disabled={authSubmitting}
+              onClick={() => void handleLogout()}
+            >
+              {authSubmitting ? "退出中..." : operatorName}
             </button>
           </div>
         </header>
@@ -737,7 +895,7 @@ export function FeeTypeManager({
           <div className="workspace-stage">
             <div className="workspace-header">
               <div>
-                <p className="workspace-breadcrumb">冷链财务管理 / 基础管理 / 费用类型维护</p>
+                <p className="workspace-breadcrumb">冷链财务管理 / 基础数据 / 费用类型维护</p>
                 <h1>费用类型维护</h1>
               </div>
               <div className="workspace-header-meta">
@@ -769,33 +927,29 @@ export function FeeTypeManager({
                 <section className="hero-panel">
                   <div className="hero-copy">
                     <p className="section-kicker">工作台说明</p>
-                    <h2>参考测试环境的菜单结构，保留费用类型维护的业务交互</h2>
+                    <h2>管理员登录后统一管理费用类型、分页查询和操作日志</h2>
                     <p>
-                      当前页面已按公司测试环境的后台工作台风格重构，支持查询、新增、编辑、删除、详情查看、分页切换，以及基于登录态的创建人与修改人记录。
+                      当前页面已切换为管理员登录态访问模式，只有管理员可查看费用类型列表、详情弹窗、分页数据与日志留痕。
                     </p>
                   </div>
 
                   <div className="session-panel">
                     <div className="session-title">
-                      <span>当前登录人</span>
+                      <span>当前登录账号</span>
                       <strong>{operatorName}</strong>
                     </div>
-                    <div className="session-form">
-                      <input
-                        value={operatorDraft}
-                        onChange={(event) => setOperatorDraft(event.target.value)}
-                        placeholder="请输入登录人姓名"
-                        maxLength={32}
-                      />
-                      <button
-                        type="button"
-                        className="primary-button"
-                        disabled={sessionSaving}
-                        onClick={() => void handleOperatorSave()}
-                      >
-                        {sessionSaving ? "保存中..." : "切换登录人"}
-                      </button>
+                    <div className="session-summary">
+                      <span>账号类型：{accountRoleLabel}</span>
+                      <span>创建人与修改人将自动记录为当前登录账户。</span>
                     </div>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={authSubmitting}
+                      onClick={() => void handleLogout()}
+                    >
+                      {authSubmitting ? "退出中..." : "退出登录"}
+                    </button>
                   </div>
                 </section>
 
