@@ -12,3 +12,16 @@ model Message {
   content   String
   createdAt DateTime @default(now())
 }
+
+model FeeType {
+  id             String   @id @default(cuid())
+  feeCode        String   @unique @db.VarChar(8)
+  feeName        String   @db.VarChar(32)
+  businessDomain String   @db.VarChar(16)
+  quoteTypes     String[]
+  note           String?  @db.VarChar(256)
+  createdBy      String   @db.VarChar(32)
+  createdAt      DateTime @default(now())
+  updatedBy      String   @db.VarChar(32)
+  updatedAt      DateTime @updatedAt
+}
