@@ -1,4 +1,8 @@
-import { DEFAULT_PAGE_SIZE } from "@/lib/fee-type-config";
+import {
+  DEFAULT_PAGE_SIZE,
+  OPERATION_LOG_TAKE,
+} from "@/lib/fee-type-config";
+import { getOperatorNameFromSession } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
 import { FeeTypeManager } from "./fee-type-manager";
 
@@ -6,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 async function getFeeTypePage() {
   try {
-    const [feeTypes, total] = await Promise.all([
+    const [feeTypes, total, operationLogs, operatorName] = await Promise.all([
       prisma.feeType.findMany({
         orderBy: {
           feeCode: "asc",
@@ -14,10 +18,19 @@ async function getFeeTypePage() {
         take: DEFAULT_PAGE_SIZE,
       }),
       prisma.feeType.count(),
+      prisma.feeTypeOperationLog.findMany({
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: OPERATION_LOG_TAKE,
+      }),
+      getOperatorNameFromSession(),
     ]);
 
     return {
       feeTypes,
+      operationLogs,
+      operatorName,
       pagination: {
         total,
         page: 1,
@@ -37,6 +50,8 @@ export default async function HomePage() {
   return (
     <FeeTypeManager
       initialRows={pageData?.feeTypes ?? []}
+      initialOperationLogs={pageData?.operationLogs ?? []}
+      initialOperatorName={pageData?.operatorName ?? "系统用户"}
       initialPagination={
         pageData?.pagination ?? {
           total: 0,

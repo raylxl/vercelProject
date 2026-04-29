@@ -3,6 +3,7 @@
 import {
   BUSINESS_DOMAIN_OPTIONS,
   DEFAULT_PAGE_SIZE,
+  OPERATION_LOG_TAKE,
   PAGE_SIZE_OPTIONS,
   QUOTE_TYPE_OPTIONS,
 } from "@/lib/fee-type-config";
@@ -20,6 +21,17 @@ type FeeTypeRecord = {
   createdAt: string | Date;
   updatedBy: string;
   updatedAt: string | Date;
+};
+
+type FeeTypeOperationLogRecord = {
+  id: string;
+  feeTypeId: string | null;
+  feeCode: string;
+  feeName: string;
+  operationType: string;
+  operatorName: string;
+  summary: string;
+  createdAt: string | Date;
 };
 
 type FilterState = {
@@ -47,6 +59,11 @@ type FeeTypeListResponse = {
   error?: string;
 };
 
+type OperationLogResponse = {
+  logs?: FeeTypeOperationLogRecord[];
+  error?: string;
+};
+
 const DEFAULT_FILTERS: FilterState = {
   feeCode: "",
   feeName: "",
@@ -64,6 +81,8 @@ const DEFAULT_FORM: FormState = {
 
 type FeeTypeManagerProps = {
   initialRows: FeeTypeRecord[];
+  initialOperationLogs: FeeTypeOperationLogRecord[];
+  initialOperatorName: string;
   initialPagination: PaginationState;
   databaseReady: boolean;
 };
@@ -151,21 +170,43 @@ function getVisiblePages(totalPages: number, currentPage: number) {
   const end = Math.min(totalPages, start + 4);
   const normalizedStart = Math.max(1, end - 4);
 
-  return Array.from({ length: end - normalizedStart + 1 }, (_, index) => normalizedStart + index);
+  return Array.from(
+    { length: end - normalizedStart + 1 },
+    (_, index) => normalizedStart + index,
+  );
+}
+
+function getOperationLabel(operationType: string) {
+  switch (operationType) {
+    case "CREATE":
+      return "新增";
+    case "UPDATE":
+      return "编辑";
+    case "DELETE":
+      return "删除";
+    default:
+      return operationType;
+  }
 }
 
 export function FeeTypeManager({
   initialRows,
+  initialOperationLogs,
+  initialOperatorName,
   initialPagination,
   databaseReady,
 }: FeeTypeManagerProps) {
   const [rows, setRows] = useState(initialRows);
+  const [operationLogs, setOperationLogs] = useState(initialOperationLogs);
+  const [operatorName, setOperatorName] = useState(initialOperatorName);
+  const [operatorDraft, setOperatorDraft] = useState(initialOperatorName);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [pagination, setPagination] = useState<PaginationState>(initialPagination);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [status, setStatus] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [sessionSaving, setSessionSaving] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "edit" | "detail" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [detailRow, setDetailRow] = useState<FeeTypeRecord | null>(null);
@@ -178,6 +219,17 @@ export function FeeTypeManager({
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedIds.includes(row.id));
   const visiblePages = getVisiblePages(pagination.totalPages, pagination.page);
 
+  async function loadOperationLogs() {
+    const response = await fetch(`/api/fee-type-operation-logs?take=${OPERATION_LOG_TAKE}`);
+    const data = (await response.json()) as OperationLogResponse;
+
+    if (!response.ok || !data.logs) {
+      throw new Error(data.error ?? "查询操作日志失败，请稍后重试。");
+    }
+
+    setOperationLogs(data.logs);
+  }
+
   async function loadRows(
     nextFilters: FilterState,
     nextPage: number,
@@ -187,9 +239,12 @@ export function FeeTypeManager({
     setLoading(true);
 
     try {
-      const response = await fetch(`/api/fee-types${buildQuery(nextFilters, nextPage, nextPageSize)}`, {
-        method: "GET",
-      });
+      const response = await fetch(
+        `/api/fee-types${buildQuery(nextFilters, nextPage, nextPageSize)}`,
+        {
+          method: "GET",
+        },
+      );
       const data = (await response.json()) as FeeTypeListResponse;
 
       if (
@@ -279,6 +334,33 @@ export function FeeTypeManager({
     setStatus("");
   }
 
+  async function handleOperatorSave() {
+    setSessionSaving(true);
+
+    try {
+      const response = await fetch("/api/session", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ operatorName: operatorDraft }),
+      });
+      const data = (await response.json()) as { operatorName?: string; error?: string };
+
+      if (!response.ok || !data.operatorName) {
+        throw new Error(data.error ?? "切换登录人失败，请稍后重试。");
+      }
+
+      setOperatorName(data.operatorName);
+      setOperatorDraft(data.operatorName);
+      setStatus(`当前登录人已切换为 ${data.operatorName}。`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "切换登录人失败，请稍后重试。");
+    } finally {
+      setSessionSaving(false);
+    }
+  }
+
   async function handleSubmit() {
     if (!modalMode) {
       return;
@@ -305,12 +387,15 @@ export function FeeTypeManager({
       }
 
       resetModal();
-      await loadRows(
-        filters,
-        modalMode === "create" ? 1 : pagination.page,
-        pagination.pageSize,
-        modalMode === "create" ? "费用类型新增成功。" : "费用类型编辑成功。",
-      );
+      await Promise.all([
+        loadRows(
+          filters,
+          modalMode === "create" ? 1 : pagination.page,
+          pagination.pageSize,
+          modalMode === "create" ? "费用类型新增成功。" : "费用类型编辑成功。",
+        ),
+        loadOperationLogs(),
+      ]);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "提交失败，请稍后重试。");
       setSubmitting(false);
@@ -344,12 +429,15 @@ export function FeeTypeManager({
         throw new Error(data.error ?? "删除失败，请稍后重试。");
       }
 
-      await loadRows(
-        filters,
-        pagination.page,
-        pagination.pageSize,
-        `已删除 ${data.deletedCount ?? selectedIds.length} 条费用类型数据。`,
-      );
+      await Promise.all([
+        loadRows(
+          filters,
+          pagination.page,
+          pagination.pageSize,
+          `已删除 ${data.deletedCount ?? selectedIds.length} 条费用类型数据。`,
+        ),
+        loadOperationLogs(),
+      ]);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "删除失败，请稍后重试。");
       setLoading(false);
@@ -360,9 +448,34 @@ export function FeeTypeManager({
     <main className="admin-shell">
       <section className="admin-heading">
         <p className="page-index">1、新增费用类型维护页面</p>
-        <div>
-          <h1>费用类型维护</h1>
-          <p>支持查询、新增、编辑、批量删除，以及分页和每页条数切换。</p>
+        <div className="heading-row">
+          <div>
+            <h1>费用类型维护</h1>
+            <p>支持查询、新增、编辑、查看详情、批量删除、分页和操作日志追踪。</p>
+          </div>
+
+          <div className="session-panel">
+            <div className="session-title">
+              <span>当前登录人</span>
+              <strong>{operatorName}</strong>
+            </div>
+            <div className="session-form">
+              <input
+                value={operatorDraft}
+                onChange={(event) => setOperatorDraft(event.target.value)}
+                placeholder="请输入登录人姓名"
+                maxLength={32}
+              />
+              <button
+                type="button"
+                className="primary-button"
+                disabled={sessionSaving}
+                onClick={() => void handleOperatorSave()}
+              >
+                {sessionSaving ? "切换中..." : "切换登录人"}
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -608,6 +721,42 @@ export function FeeTypeManager({
             当前第 {pagination.page} / {pagination.totalPages} 页。新增后默认回到第一页，删除后会自动修正页码。
           </p>
         </div>
+      </section>
+
+      <section className="log-card">
+        <div className="log-header">
+          <div>
+            <p className="log-kicker">最近操作</p>
+            <h2>操作日志</h2>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void loadOperationLogs()}
+          >
+            刷新日志
+          </button>
+        </div>
+
+        {operationLogs.length === 0 ? (
+          <div className="log-empty">暂时还没有操作日志。</div>
+        ) : (
+          <div className="log-list">
+            {operationLogs.map((log) => (
+              <article key={log.id} className="log-item">
+                <div className="log-badge">{getOperationLabel(log.operationType)}</div>
+                <div className="log-content">
+                  <p>{log.summary}</p>
+                  <div className="log-meta">
+                    <span>操作人：{log.operatorName}</span>
+                    <span>费用编号：{log.feeCode}</span>
+                    <span>时间：{formatDateTime(log.createdAt)}</span>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       {modalMode ? (

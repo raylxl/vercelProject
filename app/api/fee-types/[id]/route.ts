@@ -1,5 +1,6 @@
+import { buildUpdateSummary } from "@/lib/fee-type-operation-log";
+import { getOperatorNameFromSession } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
-import { SYSTEM_USER_NAME } from "@/lib/fee-type-config";
 import { type FeeTypePayload, validateFeeTypePayload } from "@/lib/fee-type-validation";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
@@ -29,15 +30,38 @@ export async function PUT(
       return NextResponse.json({ error: "编辑时不允许修改费用编号。" }, { status: 400 });
     }
 
-    const feeType = await prisma.feeType.update({
-      where: { id },
-      data: {
-        feeName: validation.data.feeName,
-        businessDomain: validation.data.businessDomain,
-        quoteTypes: validation.data.quoteTypes,
-        note: validation.data.note,
-        updatedBy: SYSTEM_USER_NAME,
-      },
+    const operatorName = await getOperatorNameFromSession();
+
+    const feeType = await prisma.$transaction(async (tx) => {
+      const updated = await tx.feeType.update({
+        where: { id },
+        data: {
+          feeName: validation.data.feeName,
+          businessDomain: validation.data.businessDomain,
+          quoteTypes: validation.data.quoteTypes,
+          note: validation.data.note,
+          updatedBy: operatorName,
+        },
+      });
+
+      await tx.feeTypeOperationLog.create({
+        data: {
+          feeTypeId: updated.id,
+          feeCode: updated.feeCode,
+          feeName: updated.feeName,
+          operationType: "UPDATE",
+          operatorName,
+          summary: buildUpdateSummary(existing, {
+            feeCode: updated.feeCode,
+            feeName: updated.feeName,
+            businessDomain: updated.businessDomain,
+            quoteTypes: updated.quoteTypes,
+            note: updated.note,
+          }),
+        },
+      });
+
+      return updated;
     });
 
     return NextResponse.json({ feeType });

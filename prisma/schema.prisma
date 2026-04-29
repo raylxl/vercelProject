@@ -25,3 +25,14 @@ model FeeType {
   updatedBy      String   @db.VarChar(32)
   updatedAt      DateTime @updatedAt
 }
+
+model FeeTypeOperationLog {
+  id            String   @id @default(cuid())
+  feeTypeId     String?  @db.VarChar(32)
+  feeCode       String   @db.VarChar(8)
+  feeName       String   @db.VarChar(32)
+  operationType String   @db.VarChar(16)
+  operatorName  String   @db.VarChar(32)
+  summary       String   @db.VarChar(256)
+  createdAt     DateTime @default(now())
+}

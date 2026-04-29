@@ -1,5 +1,13 @@
+import {
+  buildCreateSummary,
+  buildDeleteSummary,
+} from "@/lib/fee-type-operation-log";
+import {
+  DEFAULT_PAGE_SIZE,
+  PAGE_SIZE_OPTIONS,
+} from "@/lib/fee-type-config";
+import { getOperatorNameFromSession } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
-import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, SYSTEM_USER_NAME } from "@/lib/fee-type-config";
 import { type FeeTypePayload, validateFeeTypePayload } from "@/lib/fee-type-validation";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
@@ -91,12 +99,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
 
-    const feeType = await prisma.feeType.create({
-      data: {
-        ...validation.data,
-        createdBy: SYSTEM_USER_NAME,
-        updatedBy: SYSTEM_USER_NAME,
-      },
+    const operatorName = await getOperatorNameFromSession();
+
+    const feeType = await prisma.$transaction(async (tx) => {
+      const created = await tx.feeType.create({
+        data: {
+          ...validation.data,
+          createdBy: operatorName,
+          updatedBy: operatorName,
+        },
+      });
+
+      await tx.feeTypeOperationLog.create({
+        data: {
+          feeTypeId: created.id,
+          feeCode: created.feeCode,
+          feeName: created.feeName,
+          operationType: "CREATE",
+          operatorName,
+          summary: buildCreateSummary(created),
+        },
+      });
+
+      return created;
     });
 
     return NextResponse.json({ feeType }, { status: 201 });
@@ -123,15 +148,44 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "请至少选择一条费用类型数据。" }, { status: 400 });
     }
 
-    const result = await prisma.feeType.deleteMany({
-      where: {
-        id: {
-          in: ids,
+    const operatorName = await getOperatorNameFromSession();
+
+    const deletedCount = await prisma.$transaction(async (tx) => {
+      const rows = await tx.feeType.findMany({
+        where: {
+          id: {
+            in: ids,
+          },
         },
-      },
+      });
+
+      if (rows.length === 0) {
+        return 0;
+      }
+
+      await tx.feeTypeOperationLog.createMany({
+        data: rows.map((row) => ({
+          feeTypeId: row.id,
+          feeCode: row.feeCode,
+          feeName: row.feeName,
+          operationType: "DELETE",
+          operatorName,
+          summary: buildDeleteSummary(row),
+        })),
+      });
+
+      const result = await tx.feeType.deleteMany({
+        where: {
+          id: {
+            in: ids,
+          },
+        },
+      });
+
+      return result.count;
     });
 
-    return NextResponse.json({ deletedCount: result.count });
+    return NextResponse.json({ deletedCount });
   } catch (error) {
     console.error("DELETE /api/fee-types failed", error);
     return NextResponse.json({ error: "删除费用类型失败，请稍后重试。" }, { status: 500 });

@@ -57,6 +57,13 @@ button {
   margin-bottom: 22px;
 }
 
+.heading-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+}
+
 .page-index {
   margin: 0;
   color: var(--muted);
@@ -81,6 +88,58 @@ button {
   border-radius: 24px;
   box-shadow: var(--shadow);
   padding: 28px;
+}
+
+.session-panel,
+.log-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+}
+
+.session-panel {
+  min-width: 360px;
+  padding: 18px 20px;
+}
+
+.session-title {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.session-title span,
+.log-kicker {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.session-title strong {
+  font-size: 1.2rem;
+}
+
+.session-form {
+  display: flex;
+  gap: 12px;
+}
+
+.session-form input {
+  min-height: 44px;
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--line-dark);
+  border-radius: 12px;
+  outline: none;
+  background: #fff;
+  color: var(--text);
+}
+
+.session-form input:focus {
+  border-color: rgba(36, 99, 235, 0.58);
+  box-shadow: 0 0 0 4px rgba(36, 99, 235, 0.12);
 }
 
 .search-grid {
@@ -415,6 +474,71 @@ button {
   line-height: 1.6;
 }
 
+.log-card {
+  margin-top: 22px;
+  padding: 24px 28px;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.log-header h2 {
+  margin: 8px 0 0;
+  font-size: 1.4rem;
+}
+
+.log-empty {
+  padding: 18px 0;
+  color: var(--muted);
+}
+
+.log-list {
+  display: grid;
+  gap: 14px;
+}
+
+.log-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  align-items: start;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fcfdff;
+}
+
+.log-badge {
+  min-width: 52px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: #eef3fb;
+  color: var(--accent-dark);
+  text-align: center;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.log-content p {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.65;
+}
+
+.log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -536,6 +660,8 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .heading-row,
+  .session-form,
   .workspace-footer,
   .modal-actions,
   .pagination-bar,
