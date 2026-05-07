@@ -117,8 +117,16 @@ const SIDEBAR_MENUS: SidebarMenuItem[] = [
         label: "基础数据",
         children: [
           { label: "费用类型维护", page: "fee-type-manager" },
-          { label: "万能导入", page: "universal-import" },
         ],
+      },
+    ],
+  },
+  {
+    label: "AI考试",
+    children: [
+      {
+        label: "20260507",
+        children: [{ label: "万能导入", page: "universal-import" }],
       },
     ],
   },
