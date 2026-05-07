@@ -71,7 +71,7 @@ type OperationLogResponse = {
 
 type SidebarMenuItem = {
   label: string;
-  page?: "fee-type-manager";
+  page?: "fee-type-manager" | "universal-import";
   placeholder?: boolean;
   children?: SidebarMenuItem[];
 };
@@ -115,7 +115,10 @@ const SIDEBAR_MENUS: SidebarMenuItem[] = [
     children: [
       {
         label: "基础数据",
-        children: [{ label: "费用类型维护", page: "fee-type-manager" }],
+        children: [
+          { label: "费用类型维护", page: "fee-type-manager" },
+          { label: "万能导入", page: "universal-import" },
+        ],
       },
     ],
   },
@@ -241,7 +244,7 @@ function filterSidebarMenus(items: SidebarMenuItem[], keyword: string): SidebarM
   }, []);
 }
 
-function hasPageInTree(item: SidebarMenuItem, page: "fee-type-manager"): boolean {
+function hasPageInTree(item: SidebarMenuItem, page: "fee-type-manager" | "universal-import"): boolean {
   if (item.page === page) {
     return true;
   }
@@ -553,6 +556,12 @@ export function FeeTypeManager({
     if (item.page === "fee-type-manager") {
       setActiveMenuPath(path);
       setStatus("已切换到费用类型维护。");
+      return;
+    }
+
+    if (item.page === "universal-import") {
+      setActiveMenuPath(path);
+      window.location.assign("/universal-import");
       return;
     }
 

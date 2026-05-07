@@ -44,3 +44,49 @@ model FeeTypeOperationLog {
   summary       String   @db.VarChar(256)
   createdAt     DateTime @default(now())
 }
+
+model UniversalImportTemplate {
+  id            String   @id @default(cuid())
+  fingerprint   String   @unique @db.VarChar(512)
+  templateName  String   @db.VarChar(64)
+  mapping       Json
+  createdBy     String   @db.VarChar(32)
+  updatedBy     String   @db.VarChar(32)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model UniversalImportBatch {
+  id             String                    @id @default(cuid())
+  batchName      String                    @db.VarChar(64)
+  originalFileName String                  @db.VarChar(128)
+  sheetName      String                    @db.VarChar(64)
+  totalRows      Int
+  successRows    Int
+  failedRows     Int
+  status         String                    @db.VarChar(24)
+  createdBy      String                    @db.VarChar(32)
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+  records        UniversalImportRecord[]
+}
+
+model UniversalImportRecord {
+  id              String               @id @default(cuid())
+  batchId         String
+  batch           UniversalImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  externalCode    String?              @db.VarChar(64)
+  senderName      String               @db.VarChar(64)
+  senderPhone     String               @db.VarChar(32)
+  senderAddress   String               @db.VarChar(128)
+  receiverName    String               @db.VarChar(64)
+  receiverPhone   String               @db.VarChar(32)
+  receiverAddress String               @db.VarChar(128)
+  weight          Decimal              @db.Decimal(10, 2)
+  pieces          Int
+  temperature     String               @db.VarChar(16)
+  note            String?              @db.VarChar(256)
+  rowIndex        Int
+  raw             Json
+  createdAt       DateTime             @default(now())
+}
