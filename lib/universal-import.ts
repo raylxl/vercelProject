@@ -1,13 +1,13 @@
 export const UNIVERSAL_IMPORT_FIELDS = [
   { key: "externalCode", label: "外部编码", required: false, aliases: ["外部编码", "订单号", "单号", "externalcode", "code"] },
-  { key: "senderName", label: "发件人姓名", required: true, aliases: ["发件人姓名", "寄件人姓名", "发件人", "寄件人", "sender", "shipper"] },
-  { key: "senderPhone", label: "发件人电话", required: true, aliases: ["发件人电话", "寄件人电话", "发件人手机", "寄件人手机", "senderphone", "shipperphone", "手机"] },
-  { key: "senderAddress", label: "发件人地址", required: true, aliases: ["发件人地址", "寄件人地址", "寄件地址", "senderaddress", "shipperaddress", "地址"] },
+  { key: "senderName", label: "寄件人姓名", required: true, aliases: ["寄件人姓名", "发件人姓名", "寄件人", "发件人", "sender", "shipper"] },
+  { key: "senderPhone", label: "寄件人电话", required: true, aliases: ["寄件人电话", "发件人电话", "寄件人手机", "发件人手机", "senderphone", "shipperphone", "手机号"] },
+  { key: "senderAddress", label: "寄件人地址", required: true, aliases: ["寄件人地址", "发件人地址", "发件地", "senderaddress", "shipperaddress", "地址"] },
   { key: "receiverName", label: "收件人姓名", required: true, aliases: ["收件人姓名", "收货人姓名", "收方姓名", "收件人", "收货人", "收方", "receiver", "recipient"] },
   { key: "receiverPhone", label: "收件人电话", required: true, aliases: ["收件人电话", "收货人电话", "收方电话", "receiverphone", "recipientphone"] },
   { key: "receiverAddress", label: "收件人地址", required: true, aliases: ["收件人地址", "收货人地址", "收方地址", "receiveraddress", "recipientaddress"] },
   { key: "weight", label: "重量 (kg)", required: true, aliases: ["重量", "重量kg", "weight", "kg"] },
-  { key: "pieces", label: "件数", required: true, aliases: ["件数", "包裹数", "数量", "pcs", "pieces"] },
+  { key: "pieces", label: "件数", required: true, aliases: ["件数", "包装数", "数量", "pcs", "pieces"] },
   { key: "temperature", label: "温层", required: true, aliases: ["温层", "温度层", "常温", "冷藏", "冷冻", "temperature"] },
   { key: "note", label: "备注", required: false, aliases: ["备注", "说明", "附加说明", "note"] },
 ] as const;
@@ -49,7 +49,7 @@ function normalizeText(value: unknown) {
     .trim()
     .toLowerCase()
     .replace(/[\s_-]+/g, "")
-    .replace(/[()（）【】\[\]{}、,.，。:：/\\|]/g, "");
+    .replace(/[()（）【】\[\]{}<>《》,，.。!?！？:：;；·、/\\|]/g, "");
 }
 
 function normalizeDisplayValue(value: unknown) {
@@ -126,9 +126,10 @@ export function inferMappingFromHeaders(headers: unknown[]): UniversalImportMapp
       return { columnIndex, score };
     });
 
-    const bestScore = candidateScores.reduce((currentBest, candidate) =>
-      candidate.score > currentBest.score ? candidate : currentBest,
-    { columnIndex: -1, score: 0 });
+    const bestScore = candidateScores.reduce(
+      (currentBest, candidate) => (candidate.score > currentBest.score ? candidate : currentBest),
+      { columnIndex: -1, score: 0 },
+    );
 
     return {
       field: field.key,
@@ -231,7 +232,10 @@ function getDuplicateSourceLabel(entry: ExistingExternalCodeEntry) {
 }
 
 function normalizeExistingExternalCodes(
-  existingExternalCodes: Set<string> | Map<string, ExistingExternalCodeEntry> | ExistingExternalCodeEntry[],
+  existingExternalCodes:
+    | Set<string>
+    | Map<string, ExistingExternalCodeEntry>
+    | ExistingExternalCodeEntry[],
 ) {
   if (existingExternalCodes instanceof Set) {
     return new Map(
@@ -353,7 +357,7 @@ export function validateImportRows(
 }
 
 export function formatIssueLabel(issue: UniversalImportIssue) {
-  return `第 ${issue.rowIndex} 行，${UNIVERSAL_IMPORT_FIELD_LABELS[issue.field]}：${issue.message}`;
+  return `第${issue.rowIndex}行，${UNIVERSAL_IMPORT_FIELD_LABELS[issue.field]}：${issue.message}`;
 }
 
 export function toSafeSheetName(name: string) {

@@ -12,9 +12,9 @@ import {
   detectHeaderRow,
   formatIssueLabel,
   inferMappingFromHeaders,
-  type ExistingExternalCodeEntry,
   remapRows,
   toSafeSheetName,
+  type ExistingExternalCodeEntry,
   type UniversalImportField,
   type UniversalImportIssue,
   type UniversalImportMapping,
@@ -71,11 +71,10 @@ type HistoryFilters = {
 type SidebarMenuItem = {
   label: string;
   href?: string;
-  placeholder?: boolean;
   children?: SidebarMenuItem[];
 };
 
-type ParseProgress = {
+type ProgressState = {
   active: boolean;
   value: number;
   label: string;
@@ -96,40 +95,18 @@ const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
   pageSize: 10,
 };
 
-const TOP_NAV_ITEMS = [
-  "缃戠粶璐ц繍",
-  "椤圭洰绠＄悊",
-  "璐㈠姟涓彴",
-  "鏇村绉熸埛",
-  "蹇欢璺熻釜",
-  "寰呭姙",
-  "娑堟伅",
-] as const;
+const TOP_NAV_ITEMS = ["AI考试", "20260507", "万能导入"] as const;
 
 const UNIVERSAL_SIDEBAR_MENUS: SidebarMenuItem[] = [
-  { label: "棣栭〉", href: "/" },
   {
-    label: "鍐烽摼璐㈠姟绠＄悊",
-    children: [
-      {
-        label: "鍩虹鏁版嵁",
-        children: [
-          { label: "璐圭敤绫诲瀷缁存姢", href: "/" },
-          { label: "璐圭敤瑙勫垯缁存姢", href: "/" },
-        ],
-      },
-    ],
-  },
-  {
-    label: "AI鑰冭瘯",
+    label: "AI考试",
     children: [
       {
         label: "20260507",
-        children: [{ label: "涓囪兘瀵煎叆", href: "/universal-import" }],
+        children: [{ label: "万能导入", href: "/universal-import" }],
       },
     ],
   },
-  { label: "绯荤粺绠＄悊", placeholder: true },
 ];
 
 function createRowId() {
@@ -150,26 +127,27 @@ function normalizeMapping(raw: unknown): UniversalImportMapping | null {
   }
 
   const candidate = raw as Record<string, unknown>;
-  const mapping = Object.fromEntries(
+  return Object.fromEntries(
     UNIVERSAL_IMPORT_FIELDS.map((field) => {
       const value = candidate[field.key];
       return [field.key, typeof value === "number" ? value : null];
     }),
   ) as UniversalImportMapping;
-
-  return mapping;
 }
 
 function downloadWorkbook(rows: DraftRow[], sheetName: string) {
   const workbook = XLSX.utils.book_new();
   const exportRows = rows.map((row) =>
     Object.fromEntries(
-      UNIVERSAL_IMPORT_FIELDS.map((field) => [UNIVERSAL_IMPORT_FIELD_LABELS[field.key], row[field.key]]),
+      UNIVERSAL_IMPORT_FIELDS.map((field) => [
+        UNIVERSAL_IMPORT_FIELD_LABELS[field.key],
+        row[field.key],
+      ]),
     ),
   );
   const worksheet = XLSX.utils.json_to_sheet(exportRows);
   XLSX.utils.book_append_sheet(workbook, worksheet, toSafeSheetName(sheetName));
-  XLSX.writeFile(workbook, `${toSafeSheetName(sheetName)}_棰勮瀵煎嚭.xlsx`);
+  XLSX.writeFile(workbook, `${toSafeSheetName(sheetName)}_预览导出.xlsx`);
 }
 
 export function UniversalImportClient({ operatorName }: { operatorName: string }) {
@@ -183,14 +161,14 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
   const [mapping, setMapping] = useState<UniversalImportMapping>(DEFAULT_MAPPING);
   const [status, setStatus] = useState("");
   const [historyStatus, setHistoryStatus] = useState("");
-  const [parseProgress, setParseProgress] = useState<ParseProgress>({
+  const [parseProgress, setParseProgress] = useState<ProgressState>({
     active: false,
     value: 0,
     label: "",
     processed: 0,
     total: 0,
   });
-  const [submitProgress, setSubmitProgress] = useState<ParseProgress>({
+  const [submitProgress, setSubmitProgress] = useState<ProgressState>({
     active: false,
     value: 0,
     label: "",
@@ -202,33 +180,67 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyData, setHistoryData] = useState<ShipmentHistoryResponse>({});
   const [historyFilters, setHistoryFilters] = useState<HistoryFilters>(DEFAULT_HISTORY_FILTERS);
-  const [templateInfo, setTemplateInfo] = useState<string>("");
+  const [templateInfo, setTemplateInfo] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [existingCodeRows, setExistingCodeRows] = useState<ExistingExternalCodeEntry[]>([]);
   const [activeTab, setActiveTab] = useState<"import" | "history">("import");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
-    "AI鑰冭瘯",
-    "AI鑰冭瘯/20260507",
+    "AI考试",
+    "AI考试/20260507",
   ]);
-  const [activeMenuPath, setActiveMenuPath] = useState("AI鑰冭瘯/20260507/涓囪兘瀵煎叆");
+  const [activeMenuPath, setActiveMenuPath] = useState("AI考试/20260507/万能导入");
 
-  const existingExternalCodes = useMemo(() => {
-    return new Map(
-      existingCodeRows
-        .map((record) => [record.externalCode.trim().toLowerCase(), record] as const)
-        .filter(([value]) => Boolean(value)),
-    );
-  }, [existingCodeRows]);
+  const existingExternalCodes = useMemo(
+    () =>
+      new Map(
+        existingCodeRows
+          .map((record) => [record.externalCode.trim().toLowerCase(), record] as const)
+          .filter(([value]) => Boolean(value)),
+      ),
+    [existingCodeRows],
+  );
 
   const validation = useMemo(
     () => validateImportRows(draftRows, existingExternalCodes),
     [draftRows, existingExternalCodes],
   );
 
-  const errorRowCount = useMemo(() => {
-    return new Set(validation.issues.map((issue) => issue.rowIndex)).size;
-  }, [validation.issues]);
+  const errorRowCount = useMemo(
+    () => new Set(validation.issues.map((issue) => issue.rowIndex)).size,
+    [validation.issues],
+  );
+
+  const rowErrorsById = useMemo(() => {
+    const map = new Map<string, UniversalImportIssue[]>();
+
+    validation.issues.forEach((issue) => {
+      const row = draftRows[issue.rowIndex - 1];
+      if (!row) {
+        return;
+      }
+
+      const current = map.get(row.id) ?? [];
+      current.push(issue);
+      map.set(row.id, current);
+    });
+
+    return map;
+  }, [draftRows, validation.issues]);
+
+  const rowErrorSummary = useMemo(
+    () => validation.issues.map((issue) => formatIssueLabel(issue)),
+    [validation.issues],
+  );
+
+  const columnOptions = useMemo(
+    () =>
+      headers.map((header, index) => ({
+        value: String(index),
+        label: `${index + 1}. ${header || "未命名列"}`,
+      })),
+    [headers],
+  );
 
   const hasBlockingErrors = validation.issues.length > 0;
   const allRowsSelected = draftRows.length > 0 && selectedIds.length === draftRows.length;
@@ -265,12 +277,12 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       const data = (await response.json()) as ShipmentHistoryResponse;
 
       if (!response.ok || !data.records || typeof data.total !== "number") {
-        throw new Error(data.error ?? "?????????????");
+        throw new Error(data.error ?? "查询历史运单失败，请稍后重试。");
       }
 
       setHistoryData(data);
     } catch (error) {
-      setHistoryStatus(error instanceof Error ? error.message : "?????????????");
+      setHistoryStatus(error instanceof Error ? error.message : "查询历史运单失败，请稍后重试。");
     } finally {
       setHistoryLoading(false);
     }
@@ -307,7 +319,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
       setExistingCodeRows(collected);
     } catch {
-      // ignore code warmup errors
+      // ignore warmup errors
     }
   }
 
@@ -315,17 +327,15 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
     setAuthSubmitting(true);
 
     try {
-      const response = await fetch("/api/session", {
-        method: "DELETE",
-      });
+      const response = await fetch("/api/session", { method: "DELETE" });
 
       if (!response.ok) {
-        throw new Error("?????????????");
+        throw new Error("退出登录失败，请稍后重试。");
       }
 
       window.location.reload();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "?????????????");
+      setStatus(error instanceof Error ? error.message : "退出登录失败，请稍后重试。");
       setAuthSubmitting(false);
     }
   }
@@ -350,7 +360,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
         }),
       );
     } catch {
-      // ignore localStorage errors
+      // ignore local cache errors
     }
 
     try {
@@ -386,7 +396,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
   ) {
     setMapping(nextMapping);
     rebuildRows(nextMapping, nextRawRows);
-    setStatus("????????");
+    setStatus("映射已应用。");
 
     if (shouldPersist) {
       void persistTemplate(nextMapping, nextHeaders);
@@ -406,7 +416,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
         if (cachedMapping) {
           await applyMapping(cachedMapping, false, nextRawRows, nextHeaders);
-          setTemplateInfo("??????????");
+          setTemplateInfo("已应用本地缓存模板");
           return true;
         }
       }
@@ -425,7 +435,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
         if (serverMapping) {
           await applyMapping(serverMapping, false, nextRawRows, nextHeaders);
-          setTemplateInfo(`宸插簲鐢ㄦ湇鍔＄璁板繂妯℃澘锛?{data.template.templateName}`);
+          setTemplateInfo(`已应用服务端记忆模板：${data.template.templateName}`);
           return true;
         }
       }
@@ -435,7 +445,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
     const inferred = inferMappingFromHeaders(nextHeaders);
     await applyMapping(inferred, false, nextRawRows, nextHeaders);
-    setTemplateInfo("??????????");
+    setTemplateInfo("已启用自动识别模板");
     return false;
   }
 
@@ -446,32 +456,32 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
     const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
     if (!["xls", "xlsx"].includes(extension)) {
-      setStatus("?????????? .xlsx ? .xls ???");
+      setStatus("仅支持 .xlsx / .xls 文件。");
       return;
     }
 
-    setParseProgress({ active: true, value: 8, label: "??????...", processed: 0, total: 0 });
+    setParseProgress({ active: true, value: 8, label: "正在读取文件...", processed: 0, total: 0 });
 
     try {
       const buffer = await file.arrayBuffer();
-      setParseProgress({ active: true, value: 22, label: "???????...", processed: 0, total: 0 });
+      setParseProgress({ active: true, value: 22, label: "正在解析工作表...", processed: 0, total: 0 });
 
       let workbook: XLSX.WorkBook;
       try {
         workbook = XLSX.read(buffer, { type: "array" });
       } catch {
-        throw new Error("?????????????? Excel ???");
+        throw new Error("无法解析 Excel 文件。");
       }
 
       if (!workbook.SheetNames.length) {
-        throw new Error("???????? Sheet?");
+        throw new Error("工作表不存在。");
       }
 
       const nextSheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[nextSheetName];
 
       if (!sheet) {
-        throw new Error("Sheet ????????????????");
+        throw new Error("指定 Sheet 不存在。");
       }
 
       const matrix = XLSX.utils.sheet_to_json(sheet, {
@@ -483,13 +493,13 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       const meaningfulRows = matrix.filter(isNonEmptyRow);
 
       if (meaningfulRows.length === 0) {
-        throw new Error("????????????");
+        throw new Error("文件为空。");
       }
 
       setParseProgress({
         active: true,
         value: 40,
-        label: "??????...",
+        label: "正在识别表头...",
         processed: 0,
         total: meaningfulRows.length,
       });
@@ -499,7 +509,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       const nextRawRows = meaningfulRows.slice(headerInfo.rowIndex + 1).filter(isNonEmptyRow);
 
       if (nextRawRows.length === 0) {
-        throw new Error("???????????");
+        throw new Error("未找到有效数据行。");
       }
 
       const nextFingerprint = buildTemplateFingerprint(nextSheetName, nextHeaders);
@@ -513,7 +523,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       setParseProgress({
         active: true,
         value: 68,
-        label: "????????...",
+        label: "正在应用模板映射...",
         processed: Math.min(headerInfo.rowIndex + 1, meaningfulRows.length),
         total: meaningfulRows.length,
       });
@@ -522,20 +532,20 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       setParseProgress({
         active: true,
         value: 86,
-        label: "????????...",
+        label: "正在生成预览数据...",
         processed: nextRawRows.length,
         total: nextRawRows.length,
       });
-      setStatus("?????????????????");
+      setStatus("已完成解析，您可以检查映射并继续编辑。");
       setParseProgress({
         active: true,
         value: 100,
-        label: "????",
+        label: "完成",
         processed: nextRawRows.length,
         total: nextRawRows.length,
       });
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "???????????");
+      setStatus(error instanceof Error ? error.message : "解析失败，请检查文件格式。");
     } finally {
       window.setTimeout(() => {
         setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
@@ -551,7 +561,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
     setMapping(nextMapping);
     rebuildRows(nextMapping);
-    setStatus("?????????????");
+    setStatus("映射已更新，模板规则已同步。");
     void persistTemplate(nextMapping, headers);
   }
 
@@ -569,7 +579,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
         id: createRowId(),
       },
     ]);
-    setStatus("??????");
+    setStatus("已新增空行。");
   }
 
   function deleteRows(ids: string[]) {
@@ -577,29 +587,31 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       return;
     }
 
-    setDraftRows((current) => current.filter((row) => !ids.includes(row.id)).map((row, index) => ({
-      ...row,
-      rowIndex: index + 1,
-    })));
+    setDraftRows((current) =>
+      current
+        .filter((row) => !ids.includes(row.id))
+        .map((row, index) => ({
+          ...row,
+          rowIndex: index + 1,
+        })),
+    );
     setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
-    setStatus("???????");
+    setStatus("已删除所选行。");
   }
 
   function exportPreview() {
     if (draftRows.length === 0) {
-      setStatus("???????????");
+      setStatus("当前没有可导出的数据。");
       return;
     }
 
     downloadWorkbook(draftRows, sheetName);
-    setStatus("??????????");
+    setStatus("已导出预览文件。");
   }
 
   function toggleExpanded(path: string) {
     setExpandedMenuPaths((current) =>
-      current.includes(path)
-        ? current.filter((item) => item !== path)
-        : [...current, path],
+      current.includes(path) ? current.filter((item) => item !== path) : [...current, path],
     );
   }
 
@@ -616,11 +628,9 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       return;
     }
 
-    if (!item.href) {
-      return;
+    if (item.href) {
+      window.location.assign(item.href);
     }
-
-    window.location.assign(item.href);
   }
 
   function renderSidebarMenus(items: SidebarMenuItem[], parentPath = "", depth = 0) {
@@ -635,9 +645,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
             <div className="sidebar-menu-group" key={path}>
               <button
                 type="button"
-                className={`sidebar-nav-item${active ? " active" : ""}${
-                  item.placeholder ? " placeholder" : ""
-                }`}
+                className={`sidebar-nav-item${active ? " active" : ""}`}
                 onClick={() => handleSidebarItemClick(item, path)}
               >
                 <span className="sidebar-nav-icon" aria-hidden="true" />
@@ -650,9 +658,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
               </button>
 
               {item.children?.length && expanded ? (
-                <div className="sidebar-subnav">
-                  {renderSidebarMenus(item.children, path, depth + 1)}
-                </div>
+                <div className="sidebar-subnav">{renderSidebarMenus(item.children, path, depth + 1)}</div>
               ) : null}
             </div>
           );
@@ -663,17 +669,23 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
   async function submitImport() {
     if (draftRows.length === 0) {
-      setStatus("???? Excel ???");
+      setStatus("请先上传 Excel 文件。");
       return;
     }
 
     if (hasBlockingErrors) {
-      setStatus("???????????????");
+      setStatus("存在未修正的错误行，请先处理后再提交。");
       return;
     }
 
     setSubmitting(true);
-    setSubmitProgress({ active: true, value: 12, label: "??????...", processed: 0, total: draftRows.length });
+    setSubmitProgress({
+      active: true,
+      value: 12,
+      label: "正在提交...",
+      processed: 0,
+      total: draftRows.length,
+    });
 
     const timer = window.setInterval(() => {
       setSubmitProgress((current) => ({
@@ -689,7 +701,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          batchName: fileName || `${sheetName} 鎵规`,
+          batchName: fileName || `${sheetName} 批次`,
           originalFileName: fileName,
           sheetName,
           headers,
@@ -705,17 +717,25 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       };
 
       if (!response.ok) {
-        throw new Error(data.error ?? "???????????");
+        throw new Error(data.error ?? "提交导入失败，请稍后重试。");
       }
 
-      setSubmitProgress({ active: true, value: 100, label: "????", processed: data.summary?.successCount ?? draftRows.length, total: draftRows.length });
+      setSubmitProgress({
+        active: true,
+        value: 100,
+        label: "完成",
+        processed: data.summary?.successCount ?? draftRows.length,
+        total: draftRows.length,
+      });
       setStatus(
-        `??????? ${data.summary?.successCount ?? draftRows.length} ???? ${data.summary?.failCount ?? 0} ??`,
+        `提交成功 ${data.summary?.successCount ?? draftRows.length} 条，失败 ${
+          data.summary?.failCount ?? 0
+        } 条`,
       );
       void loadHistory({ ...historyFilters, page: 1 });
       void loadHistoryCodes();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "???????????");
+      setStatus(error instanceof Error ? error.message : "提交导入失败，请稍后重试。");
       setSubmitProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
     } finally {
       window.clearInterval(timer);
@@ -731,32 +751,6 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
     void loadHistoryCodes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const rowErrorsById = useMemo(() => {
-    const map = new Map<string, UniversalImportIssue[]>();
-
-    validation.issues.forEach((issue) => {
-      const row = draftRows[issue.rowIndex - 1];
-      if (!row) {
-        return;
-      }
-
-      const current = map.get(row.id) ?? [];
-      current.push(issue);
-      map.set(row.id, current);
-    });
-
-    return map;
-  }, [draftRows, validation.issues]);
-
-  const rowErrorSummary = useMemo(() => {
-    return validation.issues.map((issue) => formatIssueLabel(issue));
-  }, [validation.issues]);
-
-  const columnOptions = useMemo(
-    () => headers.map((header, index) => ({ value: String(index), label: `${index + 1}. ${header || "绌哄垪"}` })),
-    [headers],
-  );
 
   return (
     <main className="dashboard-shell">
@@ -819,8 +813,8 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
         <section className="workspace-shell">
           <div className="workspace-tabbar">
-            <Link className="tabbar-back" href="/">
-              ←
+            <Link className="tabbar-back" href="/universal-import">
+              返回
             </Link>
             <button
               type="button"
@@ -856,7 +850,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                       <strong>{totalCount}</strong>
                     </div>
                     <div className="meta-chip">
-                      <span>异常行数</span>
+                      <span>错误行数</span>
                       <strong>{errorRowCount}</strong>
                     </div>
                   </div>
@@ -867,7 +861,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                     <p className="section-kicker">Excel 解析</p>
                     <h2>多模板自动识别，映射确认后即可批量导入</h2>
                     <p>
-                      先上传模板，系统会自动识别表头；如果识别不准，可以直接手动调整列映射。修改后会记住这套结构，下次同类模板会自动套用。
+                      先上传模板，系统会自动识别表头；如果识别不准，可以直接手动调整列映射。修改后会记住这套结构，下次上传相似模板时会自动应用。
                     </p>
                   </div>
 
@@ -880,7 +874,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                     <article className="overview-card warning">
                       <p>错误行数</p>
                       <strong>{errorRowCount}</strong>
-                      <span>提交前需要清理</span>
+                      <span>提交前需要全部修正</span>
                     </article>
                     <article className="overview-card success">
                       <p>历史运单</p>
@@ -903,12 +897,9 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                         <h3>模板管理与文件导入</h3>
                       </div>
                       <div className="toolbar">
-                        <Link className="secondary-button" href="/">
-                          返回费用类型
-                        </Link>
                         <button
                           type="button"
-                          className="primary-button"
+                          className="secondary-button"
                           onClick={() => fileInputRef.current?.click()}
                         >
                           选择 Excel
@@ -931,9 +922,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
                     <div
                       className="upload-dropzone"
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                      }}
+                      onDragOver={(event) => event.preventDefault()}
                       onDrop={(event) => {
                         event.preventDefault();
                         const file = event.dataTransfer.files?.[0];
@@ -942,8 +931,8 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                         }
                       }}
                     >
-                      <strong>拖拽 Excel 文件到这里，或者点击右上角按钮选择文件</strong>
-                      <span>支持 .xlsx / .xls，先自动识别，再可手动修正映射。</span>
+                      <strong>拖拽 Excel 文件到这里，或点击右上角按钮上传</strong>
+                      <span>支持 .xlsx / .xls，系统会先自动识别，再允许手动调整映射。</span>
                     </div>
 
                     <div className="mapping-toolbar">
@@ -951,7 +940,9 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                         <p className="section-kicker">映射学习</p>
                         <h3>{fileName || "尚未导入文件"}</h3>
                         <p className="muted-text">
-                          {sheetName} {fingerprint ? `· ${fingerprint}` : ""} {lastSavedAt ? `· 已保存 ${lastSavedAt}` : ""}
+                          {sheetName}
+                          {fingerprint ? ` · ${fingerprint}` : ""}
+                          {lastSavedAt ? ` · 已保存 ${lastSavedAt}` : ""}
                         </p>
                       </div>
                       <div className="toolbar">
@@ -992,7 +983,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                               value={mapping[field.key] ?? ""}
                               onChange={(event) => handleMappingChange(field.key, event.target.value)}
                             >
-                              <option value="">自动识别 / 不映射</option>
+                              <option value="">自动识别 / 手动映射</option>
                               {columnOptions.map((option) => (
                                 <option key={option.value} value={option.value}>
                                   {option.label}
@@ -1008,7 +999,9 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
                     <div className="status-panel">
                       <p className={`status-text${status ? " visible" : ""}`}>{status || " "}</p>
-                      <p className="footnote">{rowErrorSummary[0] || "自动校验会在这里提示最先出现的问题。"}</p>
+                      <p className="footnote">
+                        {rowErrorSummary[0] || "自动校验会在这里提示最先出现的问题。"}
+                      </p>
                     </div>
 
                     {rowErrorSummary.length > 0 ? (
@@ -1042,9 +1035,11 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                               <input
                                 type="checkbox"
                                 checked={allRowsSelected}
-                                onChange={(event) => {
-                                  setSelectedIds(event.target.checked ? draftRows.map((row) => row.id) : []);
-                                }}
+                                onChange={(event) =>
+                                  setSelectedIds(
+                                    event.target.checked ? draftRows.map((row) => row.id) : [],
+                                  )
+                                }
                               />
                             </th>
                             <th>行号</th>
@@ -1086,6 +1081,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                                   {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                                     const issue = rowIssues.find((item) => item.field === field.key);
                                     const isTemperature = field.key === "temperature";
+
                                     return (
                                       <td key={field.key}>
                                         {isTemperature ? (
@@ -1107,7 +1103,9 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                                           <input
                                             className={`cell-input${issue ? " error" : ""}`}
                                             value={row[field.key]}
-                                            onChange={(event) => handleCellChange(row.id, field.key, event.target.value)}
+                                            onChange={(event) =>
+                                              handleCellChange(row.id, field.key, event.target.value)
+                                            }
                                             placeholder={field.label}
                                           />
                                         )}
@@ -1147,7 +1145,11 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                       <div className="progress-block">
                         <div className="progress-head">
                           <span>文件导入</span>
-                          <strong>{parseProgress.active ? `${parseProgress.value}% ? ${parseProgress.processed}/${parseProgress.total}` : "??"}</strong>
+                          <strong>
+                            {parseProgress.active
+                              ? `${parseProgress.value}% · ${parseProgress.processed}/${parseProgress.total}`
+                              : "待处理"}
+                          </strong>
                         </div>
                         <div className="progress-track">
                           <span className="progress-bar" style={{ width: `${parseProgress.value}%` }} />
@@ -1156,7 +1158,11 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                       <div className="progress-block">
                         <div className="progress-head">
                           <span>提交下单</span>
-                          <strong>{submitProgress.active ? `${submitProgress.value}% ? ${submitProgress.processed}/${submitProgress.total}` : "??"}</strong>
+                          <strong>
+                            {submitProgress.active
+                              ? `${submitProgress.value}% · ${submitProgress.processed}/${submitProgress.total}`
+                              : "待处理"}
+                          </strong>
                         </div>
                         <div className="progress-track">
                           <span className="progress-bar" style={{ width: `${submitProgress.value}%` }} />
@@ -1169,7 +1175,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                     <div className="card-heading">
                       <div>
                         <p className="section-kicker">模板</p>
-                        <h3>缓存状态与最近提示</h3>
+                        <h3>缓存状态与最近保存</h3>
                       </div>
                     </div>
 
@@ -1182,7 +1188,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                       <article className="overview-card">
                         <p>最近保存</p>
                         <strong>{lastSavedAt || "-"}</strong>
-                        <span>本地与服务端都会同步记忆。</span>
+                        <span>本地与服务端都会同步模板规则。</span>
                       </article>
                       <article className="overview-card">
                         <p>当前选中</p>
@@ -1340,7 +1346,11 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                             <td>{record.receiverName}</td>
                             <td>{record.rowIndex}</td>
                             <td>{record.batch.originalFileName || "-"}</td>
-                            <td>{new Date(record.batch.createdAt).toLocaleString("zh-CN", { hour12: false })}</td>
+                            <td>
+                              {new Date(record.batch.createdAt).toLocaleString("zh-CN", {
+                                hour12: false,
+                              })}
+                            </td>
                             <td>{record.batch.status}</td>
                           </tr>
                         ))
@@ -1374,7 +1384,10 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                     <button
                       type="button"
                       className="page-button"
-                      disabled={historyLoading || (historyData.page ?? 1) >= (historyData.totalPages ?? 1)}
+                      disabled={
+                        historyLoading ||
+                        (historyData.page ?? 1) >= (historyData.totalPages ?? 1)
+                      }
                       onClick={() =>
                         void loadHistory({
                           ...historyFilters,

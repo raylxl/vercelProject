@@ -4,6 +4,7 @@ import {
   isAuthenticated,
 } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import { FeeTypeManager } from "./fee-type-manager";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,10 @@ export default async function HomePage() {
   const authenticated = await isAuthenticated();
   const operatorName = authenticated ? await getOperatorNameFromSession() : "";
   const pageData = authenticated ? await getFeeTypePage(operatorName) : null;
+
+  if (authenticated) {
+    redirect("/universal-import");
+  }
 
   return (
     <FeeTypeManager
