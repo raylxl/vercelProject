@@ -12,6 +12,7 @@ import {
   detectHeaderRow,
   formatIssueLabel,
   inferMappingFromHeaders,
+  type ExistingExternalCodeEntry,
   remapRows,
   toSafeSheetName,
   type UniversalImportField,
@@ -78,6 +79,8 @@ type ParseProgress = {
   active: boolean;
   value: number;
   label: string;
+  processed: number;
+  total: number;
 };
 
 const DEFAULT_MAPPING = Object.fromEntries(
@@ -184,11 +187,15 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
     active: false,
     value: 0,
     label: "",
+    processed: 0,
+    total: 0,
   });
   const [submitProgress, setSubmitProgress] = useState<ParseProgress>({
     active: false,
     value: 0,
     label: "",
+    processed: 0,
+    total: 0,
   });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -197,7 +204,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
   const [historyFilters, setHistoryFilters] = useState<HistoryFilters>(DEFAULT_HISTORY_FILTERS);
   const [templateInfo, setTemplateInfo] = useState<string>("");
   const [lastSavedAt, setLastSavedAt] = useState("");
-  const [existingCodeRows, setExistingCodeRows] = useState<{ externalCode: string | null }[]>([]);
+  const [existingCodeRows, setExistingCodeRows] = useState<ExistingExternalCodeEntry[]>([]);
   const [activeTab, setActiveTab] = useState<"import" | "history">("import");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
@@ -207,10 +214,10 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
   const [activeMenuPath, setActiveMenuPath] = useState("AI鑰冭瘯/20260507/涓囪兘瀵煎叆");
 
   const existingExternalCodes = useMemo(() => {
-    return new Set(
+    return new Map(
       existingCodeRows
-        .map((record) => record.externalCode?.trim().toLowerCase())
-        .filter((value): value is string => Boolean(value)),
+        .map((record) => [record.externalCode.trim().toLowerCase(), record] as const)
+        .filter(([value]) => Boolean(value)),
     );
   }, [existingCodeRows]);
 
@@ -271,18 +278,34 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
   async function loadHistoryCodes() {
     try {
-      const response = await fetch("/api/universal-import/shipments?page=1&pageSize=1000");
-      const data = (await response.json()) as ShipmentHistoryResponse;
+      const collected: ExistingExternalCodeEntry[] = [];
+      let page = 1;
+      let totalPages = 1;
 
-      if (!response.ok || !data.records) {
-        return;
-      }
+      do {
+        const response = await fetch(`/api/universal-import/shipments?page=${page}&pageSize=1000`);
+        const data = (await response.json()) as ShipmentHistoryResponse;
 
-      setExistingCodeRows(
-        data.records.map((record) => ({
-          externalCode: record.externalCode,
-        })),
-      );
+        if (!response.ok || !data.records) {
+          return;
+        }
+
+        collected.push(
+          ...data.records
+            .filter((record) => Boolean(record.externalCode?.trim()))
+            .map((record) => ({
+              externalCode: record.externalCode ?? "",
+              rowIndex: record.rowIndex,
+              batchName: record.batch.batchName,
+              batchCreatedAt: record.batch.createdAt,
+            })),
+        );
+
+        totalPages = data.totalPages ?? page;
+        page += 1;
+      } while (page <= totalPages);
+
+      setExistingCodeRows(collected);
     } catch {
       // ignore code warmup errors
     }
@@ -420,12 +443,25 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
     setSubmitting(false);
     setStatus("");
     setTemplateInfo("");
-    setParseProgress({ active: true, value: 8, label: "姝ｅ湪璇诲彇鏂囦欢..." });
+
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["xls", "xlsx"].includes(extension)) {
+      setStatus("?????????? .xlsx ? .xls ???");
+      return;
+    }
+
+    setParseProgress({ active: true, value: 8, label: "??????...", processed: 0, total: 0 });
 
     try {
       const buffer = await file.arrayBuffer();
-      setParseProgress({ active: true, value: 22, label: "姝ｅ湪瑙ｆ瀽宸ヤ綔绨?.." });
-      const workbook = XLSX.read(buffer, { type: "array" });
+      setParseProgress({ active: true, value: 22, label: "???????...", processed: 0, total: 0 });
+
+      let workbook: XLSX.WorkBook;
+      try {
+        workbook = XLSX.read(buffer, { type: "array" });
+      } catch {
+        throw new Error("?????????????? Excel ???");
+      }
 
       if (!workbook.SheetNames.length) {
         throw new Error("???????? Sheet?");
@@ -433,6 +469,11 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
       const nextSheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[nextSheetName];
+
+      if (!sheet) {
+        throw new Error("Sheet ????????????????");
+      }
+
       const matrix = XLSX.utils.sheet_to_json(sheet, {
         header: 1,
         raw: false,
@@ -445,7 +486,14 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
         throw new Error("????????????");
       }
 
-      setParseProgress({ active: true, value: 46, label: "姝ｅ湪璇嗗埆琛ㄥご..." });
+      setParseProgress({
+        active: true,
+        value: 40,
+        label: "??????...",
+        processed: 0,
+        total: meaningfulRows.length,
+      });
+
       const headerInfo = detectHeaderRow(meaningfulRows);
       const nextHeaders = headerInfo.headers.map((header) => String(header ?? "").trim());
       const nextRawRows = meaningfulRows.slice(headerInfo.rowIndex + 1).filter(isNonEmptyRow);
@@ -462,17 +510,35 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       setRawRows(nextRawRows);
       setFingerprint(nextFingerprint);
 
-      setParseProgress({ active: true, value: 68, label: "姝ｅ湪搴旂敤妯℃澘鏄犲皠..." });
+      setParseProgress({
+        active: true,
+        value: 68,
+        label: "????????...",
+        processed: Math.min(headerInfo.rowIndex + 1, meaningfulRows.length),
+        total: meaningfulRows.length,
+      });
       await restoreTemplateFromCache(nextFingerprint, nextHeaders, nextRawRows);
 
-      setParseProgress({ active: true, value: 86, label: "姝ｅ湪鏍￠獙瀵煎叆鏁版嵁..." });
+      setParseProgress({
+        active: true,
+        value: 86,
+        label: "????????...",
+        processed: nextRawRows.length,
+        total: nextRawRows.length,
+      });
       setStatus("?????????????????");
-      setParseProgress({ active: true, value: 100, label: "瀵煎叆瀹屾垚" });
+      setParseProgress({
+        active: true,
+        value: 100,
+        label: "????",
+        processed: nextRawRows.length,
+        total: nextRawRows.length,
+      });
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "???????????");
     } finally {
       window.setTimeout(() => {
-        setParseProgress({ active: false, value: 0, label: "" });
+        setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
       }, 700);
     }
   }
@@ -607,7 +673,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
     }
 
     setSubmitting(true);
-    setSubmitProgress({ active: true, value: 12, label: "姝ｅ湪鎻愪氦涓嬪崟..." });
+    setSubmitProgress({ active: true, value: 12, label: "??????...", processed: 0, total: draftRows.length });
 
     const timer = window.setInterval(() => {
       setSubmitProgress((current) => ({
@@ -642,7 +708,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
         throw new Error(data.error ?? "???????????");
       }
 
-      setSubmitProgress({ active: true, value: 100, label: "鎻愪氦瀹屾垚" });
+      setSubmitProgress({ active: true, value: 100, label: "????", processed: data.summary?.successCount ?? draftRows.length, total: draftRows.length });
       setStatus(
         `??????? ${data.summary?.successCount ?? draftRows.length} ???? ${data.summary?.failCount ?? 0} ??`,
       );
@@ -650,12 +716,12 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       void loadHistoryCodes();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "???????????");
-      setSubmitProgress({ active: false, value: 0, label: "" });
+      setSubmitProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
     } finally {
       window.clearInterval(timer);
       setSubmitting(false);
       window.setTimeout(() => {
-        setSubmitProgress({ active: false, value: 0, label: "" });
+        setSubmitProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
       }, 700);
     }
   }
@@ -947,7 +1013,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
                     {rowErrorSummary.length > 0 ? (
                       <div className="error-list">
-                        {rowErrorSummary.slice(0, 12).map((item) => (
+                        {rowErrorSummary.map((item) => (
                           <div className="error-item" key={item}>
                             {item}
                           </div>
@@ -1081,7 +1147,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                       <div className="progress-block">
                         <div className="progress-head">
                           <span>文件导入</span>
-                          <strong>{parseProgress.active ? `${parseProgress.value}%` : "待命"}</strong>
+                          <strong>{parseProgress.active ? `${parseProgress.value}% ? ${parseProgress.processed}/${parseProgress.total}` : "??"}</strong>
                         </div>
                         <div className="progress-track">
                           <span className="progress-bar" style={{ width: `${parseProgress.value}%` }} />
@@ -1090,7 +1156,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                       <div className="progress-block">
                         <div className="progress-head">
                           <span>提交下单</span>
-                          <strong>{submitProgress.active ? `${submitProgress.value}%` : "待命"}</strong>
+                          <strong>{submitProgress.active ? `${submitProgress.value}% ? ${submitProgress.processed}/${submitProgress.total}` : "??"}</strong>
                         </div>
                         <div className="progress-track">
                           <span className="progress-bar" style={{ width: `${submitProgress.value}%` }} />

@@ -170,15 +170,27 @@ export async function POST(request: Request) {
 
     const rows = body.rows ?? [];
     const existingRecords = await prisma.universalImportRecord.findMany({
-      select: { externalCode: true },
+      select: {
+        externalCode: true,
+        rowIndex: true,
+        batch: {
+          select: {
+            batchName: true,
+            createdAt: true,
+          },
+        },
+      },
       where: {
         externalCode: { not: null },
       },
     });
 
-    const existingExternalCodes = new Set(
-      existingRecords.map((record) => record.externalCode?.toLowerCase() ?? ""),
-    );
+    const existingExternalCodes = existingRecords.map((record) => ({
+      externalCode: record.externalCode ?? "",
+      rowIndex: record.rowIndex,
+      batchName: record.batch.batchName,
+      batchCreatedAt: record.batch.createdAt.toISOString(),
+    }));
 
     const { issues } = validateImportRows(rows, existingExternalCodes);
 

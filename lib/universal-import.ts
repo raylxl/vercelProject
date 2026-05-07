@@ -28,6 +28,13 @@ export type UniversalImportIssue = {
 
 export type UniversalImportMapping = Record<UniversalImportField, number | null>;
 
+export type ExistingExternalCodeEntry = {
+  externalCode: string;
+  rowIndex?: number;
+  batchName?: string;
+  batchCreatedAt?: string;
+};
+
 export const UNIVERSAL_IMPORT_FIELD_LABELS = Object.fromEntries(
   UNIVERSAL_IMPORT_FIELDS.map((field) => [field.key, field.label]),
 ) as Record<UniversalImportField, string>;
@@ -207,19 +214,56 @@ function isPositiveInteger(value: string) {
   return /^[1-9]\d*$/.test(value);
 }
 
+function normalizeExternalCode(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function getDuplicateSourceLabel(entry: ExistingExternalCodeEntry) {
+  if (entry.rowIndex) {
+    return entry.batchName ? `历史批次“${entry.batchName}”第 ${entry.rowIndex} 行` : `历史第 ${entry.rowIndex} 行`;
+  }
+
+  if (entry.batchName) {
+    return `历史批次“${entry.batchName}”`;
+  }
+
+  return "历史数据";
+}
+
+function normalizeExistingExternalCodes(
+  existingExternalCodes: Set<string> | Map<string, ExistingExternalCodeEntry> | ExistingExternalCodeEntry[],
+) {
+  if (existingExternalCodes instanceof Set) {
+    return new Map(
+      Array.from(existingExternalCodes, (value) => [normalizeExternalCode(value), { externalCode: value }]),
+    );
+  }
+
+  if (existingExternalCodes instanceof Map) {
+    return new Map(
+      Array.from(existingExternalCodes.entries(), ([key, value]) => [normalizeExternalCode(key), value]),
+    );
+  }
+
+  return new Map(
+    existingExternalCodes.map((entry) => [normalizeExternalCode(entry.externalCode), entry]),
+  );
+}
+
 export function validateImportRows(
   rows: UniversalImportRow[],
-  existingExternalCodes: Set<string> = new Set(),
+  existingExternalCodes: Set<string> | Map<string, ExistingExternalCodeEntry> | ExistingExternalCodeEntry[] = new Set(),
 ) {
   const issues: UniversalImportIssue[] = [];
   const firstExternalCodeRow = new Map<string, number>();
+  const existingLookup = normalizeExistingExternalCodes(existingExternalCodes);
 
   rows.forEach((row, index) => {
     const rowNumber = index + 1;
     const externalCode = row.externalCode.trim();
 
     if (externalCode) {
-      const normalized = externalCode.toLowerCase();
+      const normalized = normalizeExternalCode(externalCode);
       const existingRow = firstExternalCodeRow.get(normalized);
 
       if (existingRow) {
@@ -228,14 +272,18 @@ export function validateImportRows(
           field: "externalCode",
           message: `与第 ${existingRow} 行重复`,
         });
-      } else if (existingExternalCodes.has(normalized)) {
-        issues.push({
-          rowIndex: rowNumber,
-          field: "externalCode",
-          message: "与历史数据重复",
-        });
       } else {
-        firstExternalCodeRow.set(normalized, rowNumber);
+        const existing = existingLookup.get(normalized);
+
+        if (existing) {
+          issues.push({
+            rowIndex: rowNumber,
+            field: "externalCode",
+            message: `与${getDuplicateSourceLabel(existing)}重复`,
+          });
+        } else {
+          firstExternalCodeRow.set(normalized, rowNumber);
+        }
       }
     }
 
@@ -281,7 +329,11 @@ export function validateImportRows(
 
     if (!row.temperature.trim()) {
       issues.push({ rowIndex: rowNumber, field: "temperature", message: "必填项缺失" });
-    } else if (!UNIVERSAL_IMPORT_TEMPERATURES.includes(row.temperature.trim() as (typeof UNIVERSAL_IMPORT_TEMPERATURES)[number])) {
+    } else if (
+      !UNIVERSAL_IMPORT_TEMPERATURES.includes(
+        row.temperature.trim() as (typeof UNIVERSAL_IMPORT_TEMPERATURES)[number],
+      )
+    ) {
       issues.push({ rowIndex: rowNumber, field: "temperature", message: "值不在范围内" });
     }
   });
