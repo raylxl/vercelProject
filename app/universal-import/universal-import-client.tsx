@@ -350,6 +350,7 @@ export function UniversalImportClient({
   const [selectedRuleId, setSelectedRuleId] = useState("");
   const [ruleTestSummary, setRuleTestSummary] = useState("");
   const [aiSummary, setAiSummary] = useState("");
+  const [aiSuggesting, setAiSuggesting] = useState(false);
   const [aiRiskNotes, setAiRiskNotes] = useState<string[]>([]);
   const [aiConfidenceReport, setAiConfidenceReport] = useState<Array<{ field: UniversalImportField; confidence: number; source: string }>>([]);
   const [aiProviderLabel, setAiProviderLabel] = useState("");
@@ -635,7 +636,10 @@ export function UniversalImportClient({
       return;
     }
 
+    setAiSuggesting(true);
     setAiSummary("正在生成 AI 规则建议...");
+    setAiRiskNotes([]);
+    setAiConfidenceReport([]);
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
@@ -667,6 +671,8 @@ export function UniversalImportClient({
       setAiProviderLabel("");
       setAiModelLabel("");
       setAiSummary(error instanceof Error ? error.message : "AI 规则建议生成失败，请稍后重试。");
+    } finally {
+      setAiSuggesting(false);
     }
   }
 
@@ -1119,11 +1125,16 @@ export function UniversalImportClient({
                     }}>
                       <strong>拖拽 Excel / Word / PDF 文件到这里，或点击右上角按钮上传</strong>
                       <span>上传后可先获取 AI 建议，再试解析并保存为规则。</span>
+                      {selectedFile ? (
+                        <span>当前样例文件：{selectedFile.name}</span>
+                      ) : (
+                        <span>当前尚未上传样例文件。</span>
+                      )}
                     </div>
 
                     <div className="toolbar" style={{ marginTop: 16 }}>
-                      <button type="button" className="primary-button" onClick={() => void handleAiSuggest()} disabled={!selectedFile}>
-                        AI 生成规则建议
+                      <button type="button" className="primary-button" onClick={() => void handleAiSuggest()} disabled={!selectedFile || aiSuggesting}>
+                        {aiSuggesting ? "AI 生成中..." : "AI 生成规则建议"}
                       </button>
                       <button type="button" className="secondary-button" onClick={() => void handleTestCurrentRule()} disabled={!selectedFile}>
                         试解析当前规则
