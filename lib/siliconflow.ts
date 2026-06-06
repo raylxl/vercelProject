@@ -119,6 +119,7 @@ export async function createLlmChatCompletion(options: ChatCompletionOptions & {
           provider === "deepseek"
             ? { type: "json_object" }
             : options.responseFormat,
+        ...(provider === "deepseek" ? { thinking: { type: "disabled" } } : {}),
       }),
       signal: controller.signal,
     });
