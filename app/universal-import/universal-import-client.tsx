@@ -1018,13 +1018,13 @@ export function UniversalImportClient({
   }
 
   async function handleSaveCurrentRule() {
-    if (!selectedFile || headers.length === 0) {
-      setRuleStatus("请先上传样例文件，并通过 AI 生成规则或试解析后再保存规则。");
-      return;
-    }
     try {
       const template = await saveRule("POST");
-      setRuleStatus(`规则“${template.ruleName}”已保存。`);
+      setRuleStatus(
+        headers.length > 0
+          ? `规则“${template.ruleName}”已保存。`
+          : `空白规则“${template.ruleName}”已创建，可后续上传样例文件、生成 AI 建议或编辑 Transform Config。`,
+      );
     } catch (error) {
       setRuleStatus(error instanceof Error ? error.message : "保存规则失败，请稍后重试。");
     }
@@ -1047,10 +1047,6 @@ export function UniversalImportClient({
   async function handleUpdateSelectedRule() {
     if (!selectedRuleId) {
       setRuleStatus("请先选择一条规则再更新。");
-      return;
-    }
-    if (!selectedFile || headers.length === 0) {
-      setRuleStatus("请先上传样例文件并完成试解析后再更新规则。");
       return;
     }
     try {
@@ -2127,7 +2123,7 @@ export function UniversalImportClient({
                           })}
                         </div>
                       ) : (
-                        <div className="empty-row rule-editor-empty">请先上传样例文件并生成 AI 建议，或应用一条带样例表头的已保存规则。</div>
+                        <div className="empty-row rule-editor-empty">可直接点击“新建规则”创建空白规则；如需配置字段映射，请上传样例文件生成 AI 建议，或应用一条带样例表头的已保存规则。</div>
                       )}
                     </div>
 
