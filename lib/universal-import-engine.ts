@@ -177,6 +177,42 @@ function isPositiveQuantity(value: string) {
   return /^\d+(?:\.\d+)?$/.test(value.trim()) && Number(value) > 0;
 }
 
+function isSkuCodeLike(value: string) {
+  return /[A-Za-z]{2,}[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*/.test(value.trim());
+}
+
+function findSkuCodeMatch(value: string) {
+  return value.trim().match(/([A-Za-z]{2,}[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*)\s*(.*)/);
+}
+
+function isUnitLike(value: string) {
+  return /^(?:件|瓶|包|箱|盒|袋|桶|套|个|支|条|片|斤|kg|g|l|ml)$/i.test(value.trim());
+}
+
+function splitNameAndSpec(value: string) {
+  const normalized = value.trim();
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) {
+    return {
+      skuName: normalized,
+      skuSpec: "",
+    };
+  }
+
+  const maybeSpec = parts.at(-1) ?? "";
+  if (!/(?:\d|kg|g|l|ml|码|件|包|瓶|桶|盒|箱|袋|套|个)/i.test(maybeSpec)) {
+    return {
+      skuName: normalized,
+      skuSpec: "",
+    };
+  }
+
+  return {
+    skuName: parts.slice(0, -1).join(" "),
+    skuSpec: maybeSpec,
+  };
+}
+
 function isMetricLikeMatrixHeader(value: string) {
   return /^(?:\d+(?:\.\d+)?)$/.test(value) || /(合计|结余|库存|数量|在库|可用|冻结|分配|待移入)/.test(value);
 }
@@ -782,6 +818,38 @@ function parseRowsByMapping(
         values[field] = value;
       }
     });
+
+    const mappedSkuCodeMatch = findSkuCodeMatch(normalizeCell(values.skuCode));
+    if (mappedSkuCodeMatch?.[2]) {
+      const split = splitNameAndSpec(mappedSkuCodeMatch[2]);
+      const currentSkuName = normalizeCell(values.skuName);
+      values.skuCode = mappedSkuCodeMatch[1];
+      if (!currentSkuName || isUnitLike(currentSkuName)) {
+        values.skuName = split.skuName;
+      }
+      if (!normalizeCell(values.skuSpec) || isPositiveQuantity(normalizeCell(values.skuSpec))) {
+        values.skuSpec = split.skuSpec;
+      }
+    }
+
+    if (!normalizeCell(values.skuCode) || !normalizeCell(values.skuName)) {
+      const skuCell = sourceRow.find((cell) => isSkuCodeLike(cell));
+      const skuMatch = skuCell ? findSkuCodeMatch(skuCell) : null;
+      if (skuMatch) {
+        const split = splitNameAndSpec(skuMatch[2] ?? "");
+        values.skuCode = normalizeCell(values.skuCode) || skuMatch[1];
+        values.skuName = normalizeCell(values.skuName) || split.skuName;
+        values.skuSpec = normalizeCell(values.skuSpec) || split.skuSpec;
+      }
+    }
+
+    if (!isPositiveQuantity(normalizeCell(values.skuQuantity))) {
+      const quantityCandidates = sourceRow.length > 1 ? sourceRow.slice(1) : sourceRow;
+      const lastPositiveQuantity = quantityCandidates.slice().reverse().find((cell) => isPositiveQuantity(cell));
+      if (lastPositiveQuantity) {
+        values.skuQuantity = lastPositiveQuantity;
+      }
+    }
 
     const hasRequiredValues = requiredFields.length
       ? requiredFields.every((field) => normalizeCell(values[field]))

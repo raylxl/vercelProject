@@ -284,7 +284,7 @@ function applyHeaderRecommendation(rule: UniversalImportRuleDsl, headerRowIndex:
       transform.type === "header_mapping"
         ? {
             ...transform,
-            enabled: true,
+            enabled: transform.enabled || rule.fileType === "excel",
             config: {
               ...(transform.config ?? {}),
               headerRowIndex,
