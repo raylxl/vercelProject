@@ -31,7 +31,7 @@ function createRuleFingerprint(sheetName: string, headers: unknown[]) {
   return `${buildTemplateFingerprint(sheetName, headers)}::${crypto.randomUUID()}`;
 }
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
     const unauthorizedResponse = await ensureAuthenticated();
 
@@ -39,27 +39,9 @@ export async function GET(request: Request) {
       return unauthorizedResponse;
     }
 
-    const { searchParams } = new URL(request.url);
-    const fingerprint = searchParams.get("fingerprint")?.trim() ?? "";
-
-    if (!fingerprint) {
-      const templates = await prisma.universalImportRule.findMany({
-        orderBy: { updatedAt: "desc" },
-        take: 50,
-        include: {
-          _count: {
-            select: {
-              batches: true,
-            },
-          },
-        },
-      });
-
-      return NextResponse.json({ templates });
-    }
-
-    const template = await prisma.universalImportRule.findUnique({
-      where: { fingerprint },
+    const templates = await prisma.universalImportRule.findMany({
+      orderBy: { updatedAt: "desc" },
+      take: 50,
       include: {
         _count: {
           select: {
@@ -69,7 +51,7 @@ export async function GET(request: Request) {
       },
     });
 
-    return NextResponse.json({ template });
+    return NextResponse.json({ templates });
   } catch (error) {
     console.error("GET /api/universal-import/templates failed", error);
     return NextResponse.json({ error: "查询规则失败，请稍后重试。" }, { status: 500 });

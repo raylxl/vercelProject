@@ -414,7 +414,6 @@ export function UniversalImportClient({
   const selectedCount = selectedIds.length;
   const totalCount = draftRows.length;
   const groupedPreviewCount = useMemo(() => new Set(draftRows.map((row) => row.externalCode.trim())).size, [draftRows]);
-
   function pushToast(message: string, tone: ToastTone = "info") {
     const id = createRowId();
     setToasts((current) => [...current, { id, message, tone }]);
@@ -554,6 +553,55 @@ export function UniversalImportClient({
     }
   }
 
+  function handleFileSelected(file: File, nextFileType: SupportedImportFileType) {
+    setSelectedFile(file);
+    setFileName(file.name);
+    setFileType(nextFileType);
+    setDraftRows([]);
+    setSelectedIds([]);
+    setHeaders([]);
+    setFingerprint("");
+    setRuleTestSummary("");
+    setStatus(
+      selectedRuleId
+        ? "文件已上传，请点击“试解析选中规则”。"
+        : "文件已上传，请先在“选择解析规则”中手动选择一条规则。",
+    );
+  }
+
+  function handleRuleSelect(ruleId: string) {
+    if (!ruleId) {
+      setSelectedRuleId("");
+      setRuleNameInput("");
+      setTemplateInfo("请先手动选择解析规则，不做自动匹配。");
+      setStatus("已清空解析规则选择，试解析和提交前必须重新选择规则。");
+      return;
+    }
+
+    const rule = ruleList.find((item) => item.id === ruleId);
+    if (rule) {
+      handleApplyRule(rule);
+      setFileType(rule.fileType as SupportedImportFileType);
+      setDraftRows([]);
+      setSelectedIds([]);
+      setFingerprint("");
+      setRuleTestSummary("");
+    }
+  }
+
+  function handleFileTypeChange(nextFileType: SupportedImportFileType) {
+    setFileType(nextFileType);
+    setSelectedRuleId("");
+    setRuleNameInput("");
+    setDraftRows([]);
+    setSelectedIds([]);
+    setHeaders([]);
+    setFingerprint("");
+    setRuleTestSummary("");
+    setTemplateInfo("文件类型已变更，请重新手动选择解析规则。");
+    setStatus("文件类型已变更，请重新在“选择解析规则”中选择已保存规则。");
+  }
+
   async function handleLogout() {
     setAuthSubmitting(true);
     try {
@@ -655,6 +703,11 @@ export function UniversalImportClient({
 
       const normalizedMapping = normalizeMapping(data.suggestedRule.mapping) ?? DEFAULT_MAPPING;
       setRuleDsl(data.suggestedRule);
+      setSelectedRuleId("");
+      setDraftRows([]);
+      setSelectedIds([]);
+      setFingerprint("");
+      setRuleTestSummary("");
       setMapping(normalizedMapping);
       setHeaders(data.documentSummary.headers);
       setSheetName(data.documentSummary.sheetName);
@@ -750,6 +803,10 @@ export function UniversalImportClient({
     setRuleNameInput(rule.ruleName);
     setMapping(normalizedMapping);
     setRuleDsl(nextRuleDsl);
+    setDraftRows([]);
+    setSelectedIds([]);
+    setFingerprint("");
+    setRuleTestSummary("");
     setTemplateInfo(`当前使用规则：${rule.ruleName}`);
     setStatus(`已加载规则：${rule.ruleName}。请上传样例文件或重新试解析。`);
   }
@@ -803,6 +860,11 @@ export function UniversalImportClient({
       setRuleTestSummary("请先上传样例文件。");
       return;
     }
+    if (activeTab === "import" && !selectedRuleId) {
+      setStatus("请先手动选择解析规则，再执行试解析。");
+      setRuleTestSummary("考试要求：上传文件时由用户手动选择规则，系统不做自动匹配。");
+      return;
+    }
     await handleFileParse(selectedFile, fileType, mapping, ruleDsl);
   }
 
@@ -838,6 +900,11 @@ export function UniversalImportClient({
   }
 
   async function submitImport() {
+    if (!selectedRuleId) {
+      setStatus("请先手动选择解析规则，再提交下单。");
+      return;
+    }
+
     if (draftRows.length === 0) {
       setStatus("请先导入并试解析文件。");
       return;
@@ -1125,7 +1192,7 @@ export function UniversalImportClient({
                           onChange={(event) => {
                             const file = event.target.files?.[0];
                             if (file) {
-                              void handleFileParse(file, fileType);
+                              handleFileSelected(file, fileType);
                             }
                             event.target.value = "";
                           }}
@@ -1136,10 +1203,21 @@ export function UniversalImportClient({
                     <div className="history-filters">
                       <label className="search-field">
                         <span>文件类型</span>
-                        <select value={fileType} onChange={(event) => setFileType(event.target.value as SupportedImportFileType)}>
+                        <select value={fileType} onChange={(event) => handleFileTypeChange(event.target.value as SupportedImportFileType)}>
                           <option value="excel">Excel</option>
                           <option value="word">Word</option>
                           <option value="pdf">PDF</option>
+                        </select>
+                      </label>
+                      <label className="search-field">
+                        <span>选择解析规则</span>
+                        <select value={selectedRuleId} onChange={(event) => handleRuleSelect(event.target.value)}>
+                          <option value="">请选择已保存规则</option>
+                          {ruleList.map((rule) => (
+                            <option value={rule.id} key={rule.id}>
+                              {rule.ruleName} / {rule.fileType} / v{rule.version}
+                            </option>
+                          ))}
                         </select>
                       </label>
                       <label className="search-field">
@@ -1152,11 +1230,11 @@ export function UniversalImportClient({
                       event.preventDefault();
                       const file = event.dataTransfer.files?.[0];
                       if (file) {
-                        void handleFileParse(file, fileType);
+                        handleFileSelected(file, fileType);
                       }
                     }}>
                       <strong>拖拽 Excel / Word / PDF 文件到这里，或点击右上角按钮上传</strong>
-                      <span>上传后可先获取 AI 建议，再试解析并保存为规则。</span>
+                      <span>上传后必须手动选择已保存规则，再执行试解析；系统不做自动匹配。</span>
                       {selectedFile ? (
                         <span>当前样例文件：{selectedFile.name}</span>
                       ) : (
@@ -1168,8 +1246,8 @@ export function UniversalImportClient({
                       <button type="button" className="primary-button" onClick={() => void handleAiSuggest()} disabled={!selectedFile || aiSuggesting}>
                         {aiSuggesting ? "AI 生成中..." : "AI 生成规则建议"}
                       </button>
-                      <button type="button" className="secondary-button" onClick={() => void handleTestCurrentRule()} disabled={!selectedFile}>
-                        试解析当前规则
+                      <button type="button" className="secondary-button" onClick={() => void handleTestCurrentRule()} disabled={!selectedFile || !selectedRuleId}>
+                        试解析选中规则
                       </button>
                       <button type="button" className="tool-button" onClick={addEmptyRow}>
                         + 新增行

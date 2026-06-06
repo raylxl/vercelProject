@@ -277,27 +277,29 @@ export async function POST(request: Request) {
       });
     });
 
-    const rule = body.ruleId?.trim()
-      ? await prisma.universalImportRule.findUnique({
-          where: {
-            id: body.ruleId.trim(),
-          },
-          select: {
-            id: true,
-            version: true,
-          },
-        })
-      : body.fingerprint?.trim()
-        ? await prisma.universalImportRule.findUnique({
-            where: {
-              fingerprint: body.fingerprint.trim(),
-            },
-            select: {
-              id: true,
-              version: true,
-            },
-          })
-        : null;
+    if (!body.ruleId?.trim()) {
+      return NextResponse.json(
+        { error: "请先手动选择解析规则后再提交，系统不会按文件自动匹配规则。" },
+        { status: 400 },
+      );
+    }
+
+    const rule = await prisma.universalImportRule.findUnique({
+      where: {
+        id: body.ruleId.trim(),
+      },
+      select: {
+        id: true,
+        version: true,
+      },
+    });
+
+    if (!rule) {
+      return NextResponse.json(
+        { error: "选中的解析规则不存在，请重新选择规则。" },
+        { status: 400 },
+      );
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       const batch = await tx.universalImportBatch.create({
