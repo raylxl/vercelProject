@@ -9,6 +9,7 @@ import {
   type UniversalImportRow,
   validateImportRows,
 } from "@/lib/universal-import";
+import { ensurePdfRuntimePolyfills } from "@/lib/pdf-runtime-polyfills";
 
 export type SupportedImportFileType = "excel" | "word" | "pdf";
 
@@ -95,6 +96,8 @@ function normalizeCell(value: unknown) {
 }
 
 async function loadPdfParseModule() {
+  ensurePdfRuntimePolyfills();
+
   return (await import("pdf-parse")) as unknown as {
     PDFParse?: PdfParseClass;
     default?: (buffer: Buffer) => Promise<PdfParseTextResult>;
