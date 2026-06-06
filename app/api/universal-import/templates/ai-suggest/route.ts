@@ -178,6 +178,54 @@ function normalizeMapping(candidate: Partial<Record<UniversalImportField, number
   ) as UniversalImportMapping;
 }
 
+function parseAiJson(content: string) {
+  const trimmed = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+
+  try {
+    return JSON.parse(trimmed) as AiRuleSuggestion;
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1)) as AiRuleSuggestion;
+    }
+
+    throw new Error("LLM returned non-JSON content");
+  }
+}
+
+function normalizeEnabledTransforms(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item));
+  }
+
+  return typeof value === "string"
+    ? value.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)
+    : undefined;
+}
+
+function normalizeConfidenceReport(value: unknown) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.filter((item): item is AiConfidenceItem => {
+    if (!isRecord(item)) {
+      return false;
+    }
+
+    return typeof item.field === "string" && typeof item.confidence === "number";
+  });
+}
+
+function normalizeRiskNotes(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).filter(Boolean);
+  }
+
+  return typeof value === "string" && value.trim() ? [value.trim()] : [];
+}
+
 function mergeTransforms(baseRule: UniversalImportRuleDsl, enabledTransforms: string[] | undefined) {
   if (!enabledTransforms?.length) {
     return baseRule;
@@ -371,8 +419,10 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
     },
   });
 
-  const parsed = JSON.parse(content) as AiRuleSuggestion;
-  const mapping = normalizeMapping(parsed.mapping, inferredMapping);
+  const parsed = parseAiJson(content);
+  const confidenceReport = normalizeConfidenceReport(parsed.confidenceReport);
+  const riskNotes = normalizeRiskNotes(parsed.riskNotes);
+  const mapping = normalizeMapping(isRecord(parsed.mapping) ? parsed.mapping : undefined, inferredMapping);
   const baseRule = createDefaultRuleDsl(mapping, fileType);
   const mode = parsed.mode ?? baseRule.mode;
   const suggestedRule = ensureMultiSectionMerge(mergeTransformConfigs(mergeTransforms(
@@ -381,13 +431,13 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
       mode,
       mapping,
     },
-    parsed.enabledTransforms,
-  ), parsed.transformConfigs), document.sections.length);
+    normalizeEnabledTransforms(parsed.enabledTransforms),
+  ), isRecord(parsed.transformConfigs) ? parsed.transformConfigs as Record<string, Record<string, unknown>> : undefined), document.sections.length);
 
   return {
     suggestedRule,
     confidenceReport:
-      parsed.confidenceReport?.map((item) => ({
+      confidenceReport?.map((item) => ({
         field: item.field,
         confidence: Math.max(0, Math.min(1, item.confidence)),
         source: item.source || "llm",
@@ -397,7 +447,7 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
         confidence: typeof mapping[field.key] === "number" ? 0.8 : 0.3,
         source: "llm-default",
       })),
-    riskNotes: parsed.riskNotes?.filter(Boolean) ?? [],
+    riskNotes,
     aiSummary: parsed.summary,
   };
 }
