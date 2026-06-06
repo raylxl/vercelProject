@@ -297,6 +297,118 @@ function applyHeaderRecommendation(rule: UniversalImportRuleDsl, headerRowIndex:
   };
 }
 
+const KEY_VALUE_FIELD_ALIASES: Record<UniversalImportField, string[]> = {
+  externalCode: ["外部编码", "订单号", "配送单号", "配送汇总单号", "单据编号", "单据号", "单号"],
+  receiverStore: ["收货门店", "门店", "门店名称", "收货机构", "收货单位"],
+  receiverName: ["收货人姓名", "收件人姓名", "收货人", "收件人"],
+  receiverPhone: ["收货人电话", "收件人电话", "收货电话", "联系电话", "备用联系电话", "手机"],
+  receiverAddress: ["收货地址", "收件人地址", "收货人地址", "地址"],
+  skuCode: [],
+  skuName: [],
+  skuQuantity: [],
+  skuSpec: [],
+  note: ["备注", "收货机构备注", "附加说明", "说明"],
+};
+
+function normalizeKeyValueLabel(value: unknown) {
+  return String(value ?? "")
+    .replace(/^[【\[].*?[】\]]\s*/g, "")
+    .replace(/[：:]\s*$/g, "")
+    .trim();
+}
+
+function hasNearbyValue(row: string[], cellIndex: number) {
+  return row
+    .slice(cellIndex + 1, Math.min(row.length, cellIndex + 5))
+    .some((cell) => Boolean(String(cell ?? "").trim()));
+}
+
+function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parseImportDocument>>) {
+  const firstSection = document.sections[0];
+  const rows = firstSection?.rows ?? [];
+  const labels: Partial<Record<UniversalImportField, string[]>> = {};
+  const matchedRowIndexes = new Set<number>();
+
+  rows.forEach((row, rowIndex) => {
+    row.forEach((cell, cellIndex) => {
+      const normalizedCell = normalizeHeaderText(normalizeKeyValueLabel(cell));
+      if (!normalizedCell || !hasNearbyValue(row, cellIndex)) {
+        return;
+      }
+
+      (Object.keys(KEY_VALUE_FIELD_ALIASES) as UniversalImportField[]).forEach((field) => {
+        const aliases = KEY_VALUE_FIELD_ALIASES[field];
+        if (aliases.length === 0) {
+          return;
+        }
+
+        const matched = aliases.some((alias) => {
+          const normalizedAlias = normalizeHeaderText(alias);
+          return normalizedAlias && normalizedCell === normalizedAlias;
+        });
+
+        if (!matched) {
+          return;
+        }
+
+        const exactLabel = String(cell ?? "").trim();
+        if (!exactLabel) {
+          return;
+        }
+
+        labels[field] = Array.from(new Set([...(labels[field] ?? []), exactLabel]));
+        matchedRowIndexes.add(rowIndex);
+      });
+    });
+  });
+
+  const matchedFields = (Object.keys(labels) as UniversalImportField[]).filter((field) => (labels[field]?.length ?? 0) > 0);
+  if (matchedFields.length === 0) {
+    return null;
+  }
+
+  const config: Record<string, unknown> = {
+    source: "document",
+    keyValueLabels: labels,
+  };
+
+  return {
+    config,
+    matchedFields,
+    matchedRowIndexes: Array.from(matchedRowIndexes.values()),
+  };
+}
+
+function applyKeyValueExtractionRecommendation(
+  rule: UniversalImportRuleDsl,
+  document: Awaited<ReturnType<typeof parseImportDocument>>,
+) {
+  const inferred = inferKeyValueExtractionConfig(document);
+  if (!inferred) {
+    return { rule, extractedFields: [] as UniversalImportField[], matchedRowIndexes: [] as number[] };
+  }
+
+  return {
+    extractedFields: inferred.matchedFields,
+    matchedRowIndexes: inferred.matchedRowIndexes,
+    rule: {
+      ...rule,
+      transforms: rule.transforms.map((transform) =>
+        transform.type === "tail_text_extract"
+          ? {
+              ...transform,
+              enabled: true,
+              config: {
+                ...(transform.config ?? {}),
+                ...inferred.config,
+              },
+            }
+          : transform,
+      ),
+    },
+  };
+}
+
 function createFallbackSuggestion(
   fileType: SupportedImportFileType,
   suggestedMapping: UniversalImportMapping,
@@ -309,11 +421,23 @@ function createFallbackSuggestion(
   const effectiveMapping = fileType === "excel"
     ? mergeMappingCandidates(undefined, inferMappingFromHeaders(effectiveHeaders), suggestedMapping)
     : suggestedMapping;
-  const recommendedRule = applyHeaderRecommendation(suggestedRule, headerRowIndex, effectiveMapping);
+  const headerRecommendedRule = applyHeaderRecommendation(suggestedRule, headerRowIndex, effectiveMapping);
+  const tailRecommended = applyKeyValueExtractionRecommendation(headerRecommendedRule, document);
+  const recommendedRule = tailRecommended.rule;
   const confidenceReport = UNIVERSAL_IMPORT_FIELDS.map((field) => ({
     field: field.key,
-    confidence: typeof effectiveMapping[field.key] === "number" ? 0.92 : 0.45,
-    source: typeof effectiveMapping[field.key] === "number" ? "header-match" : "heuristic-fallback",
+    confidence:
+      typeof effectiveMapping[field.key] === "number"
+        ? 0.92
+        : tailRecommended.extractedFields.includes(field.key)
+          ? 0.82
+          : 0.45,
+    source:
+      typeof effectiveMapping[field.key] === "number"
+        ? "header-match"
+        : tailRecommended.extractedFields.includes(field.key)
+          ? "tail-key-value"
+          : "heuristic-fallback",
   }));
 
   return {
@@ -327,6 +451,9 @@ function createFallbackSuggestion(
       fileType !== "excel" ? "当前为非 Excel 文档，部分字段来自文本结构推断，建议人工确认。" : "",
       document.sections.length > 1 ? "检测到多段或多 Sheet 内容，建议开启多 Sheet 合并或卡片拆分规则。" : "",
       document.rawRows.length === 0 ? "未识别到标准表格数据，建议切换到纯文本解析模式。" : "",
+      tailRecommended.extractedFields.length > 0
+        ? `检测到文档键值信息区，已建议通过 tail_text_extract 提取字段：${tailRecommended.extractedFields.map((field) => UNIVERSAL_IMPORT_FIELDS.find((item) => item.key === field)?.label ?? field).join("、")}。`
+        : "",
       "当前结果来自本地兜底规则，并非大模型输出。",
     ].filter(Boolean),
     provider: "fallback",
@@ -632,7 +759,9 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
     getAiConfiguredFieldColumns(transformConfigs),
     headerBackedMapping,
   );
-  const suggestedRule = applyHeaderRecommendation(mergedRule, headerRowIndex, mapping);
+  const headerRecommendedRule = applyHeaderRecommendation(mergedRule, headerRowIndex, mapping);
+  const tailRecommended = applyKeyValueExtractionRecommendation(headerRecommendedRule, document);
+  const suggestedRule = tailRecommended.rule;
 
   const normalizedConfidenceReport =
       confidenceReport?.map((item) => ({
@@ -642,8 +771,13 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
       })) ??
       UNIVERSAL_IMPORT_FIELDS.map((field) => ({
         field: field.key,
-        confidence: typeof mapping[field.key] === "number" ? 0.8 : 0.3,
-        source: "llm-default",
+        confidence:
+          typeof mapping[field.key] === "number"
+            ? 0.8
+            : tailRecommended.extractedFields.includes(field.key)
+              ? 0.78
+              : 0.3,
+        source: tailRecommended.extractedFields.includes(field.key) ? "tail-key-value" : "llm-default",
       }));
 
   return {
@@ -652,7 +786,12 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
       aiConfidenceReport: normalizedConfidenceReport,
     },
     confidenceReport: normalizedConfidenceReport,
-    riskNotes,
+    riskNotes: [
+      ...riskNotes,
+      tailRecommended.extractedFields.length > 0
+        ? `检测到键值信息区，建议通过 tail_text_extract 提取：${tailRecommended.extractedFields.map((field) => UNIVERSAL_IMPORT_FIELDS.find((item) => item.key === field)?.label ?? field).join("、")}。`
+        : "",
+    ].filter(Boolean),
     aiSummary: parsed.summary,
   };
 }

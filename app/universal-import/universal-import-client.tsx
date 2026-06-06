@@ -386,6 +386,16 @@ function getAiMappingStatus(item: AiConfidenceItem | undefined) {
       label: "需确认",
       tone: "warning",
       detail: "AI 未返回置信度，请人工确认",
+      strategy: "unconfirmed",
+    };
+  }
+
+  if (item.source === "tail-key-value") {
+    return {
+      label: "尾部提取",
+      tone: "info",
+      detail: `${Math.round(item.confidence * 100)}% / 文档键值区提取，不走列表头映射`,
+      strategy: "tail",
     };
   }
 
@@ -394,6 +404,7 @@ function getAiMappingStatus(item: AiConfidenceItem | undefined) {
       label: "高置信",
       tone: "success",
       detail: `${Math.round(item.confidence * 100)}% / ${item.source}`,
+      strategy: "column",
     };
   }
 
@@ -402,6 +413,7 @@ function getAiMappingStatus(item: AiConfidenceItem | undefined) {
       label: "AI推测",
       tone: "info",
       detail: `${Math.round(item.confidence * 100)}% / ${item.source}`,
+      strategy: "column",
     };
   }
 
@@ -409,6 +421,7 @@ function getAiMappingStatus(item: AiConfidenceItem | undefined) {
     label: "需确认",
     tone: "warning",
     detail: `${Math.round(item.confidence * 100)}% / ${item.source}`,
+    strategy: "unconfirmed",
   };
 }
 
@@ -1687,7 +1700,7 @@ export function UniversalImportClient({
                                 value={typeof currentColumn === "number" ? String(currentColumn) : ""}
                                 onChange={(event) => handleMappingColumnChange(field.key, event.target.value)}
                               >
-                                <option value="">未映射</option>
+                                <option value="">{aiStatus.strategy === "tail" ? "建议由尾部信息提取" : "未映射"}</option>
                                 {activeColumnOptions.map((option) => (
                                   <option value={option.index} key={`${option.header}-${option.index}`}>
                                     {formatColumnOption(option)}
@@ -2192,7 +2205,7 @@ export function UniversalImportClient({
                                   value={typeof currentColumn === "number" ? String(currentColumn) : ""}
                                   onChange={(event) => handleMappingColumnChange(field.key, event.target.value)}
                                 >
-                                  <option value="">未映射</option>
+                                  <option value="">{aiStatus.strategy === "tail" ? "建议由尾部信息提取" : "未映射"}</option>
                                   {activeColumnOptions.map((option) => (
                                     <option value={option.index} key={`${option.header}-${option.index}`}>
                                       {formatColumnOption(option)}
