@@ -176,17 +176,33 @@ export async function POST(request: Request) {
 
     const rows = body.rows ?? [];
 
-    const existingShipments = await prisma.universalImportShipment.findMany({
-      select: {
-        externalCode: true,
-        batch: {
-          select: {
-            batchName: true,
-            createdAt: true,
-          },
-        },
-      },
-    });
+    const importExternalCodes = Array.from(
+      new Set(
+        rows
+          .map((row) => row.externalCode.trim())
+          .filter(Boolean),
+      ),
+    );
+
+    const existingShipments =
+      importExternalCodes.length === 0
+        ? []
+        : await prisma.universalImportShipment.findMany({
+            where: {
+              externalCode: {
+                in: importExternalCodes,
+              },
+            },
+            select: {
+              externalCode: true,
+              batch: {
+                select: {
+                  batchName: true,
+                  createdAt: true,
+                },
+              },
+            },
+          });
 
     const existingExternalCodes = existingShipments.map((record) => ({
       externalCode: record.externalCode,

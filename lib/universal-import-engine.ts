@@ -1,6 +1,5 @@
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
-import * as pdfParseModule from "pdf-parse";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -93,6 +92,13 @@ const HEADER_KEYWORDS = [
 
 function normalizeCell(value: unknown) {
   return String(value ?? "").trim();
+}
+
+async function loadPdfParseModule() {
+  return (await import("pdf-parse")) as unknown as {
+    PDFParse?: PdfParseClass;
+    default?: (buffer: Buffer) => Promise<PdfParseTextResult>;
+  };
 }
 
 function isNonEmptyRow(row: unknown[]) {
@@ -263,10 +269,9 @@ async function parseWordDocument(fileBuffer: Buffer, originalFileName: string): 
 }
 
 async function parsePdfDocument(fileBuffer: Buffer, originalFileName: string): Promise<ParsedDocument> {
+  const pdfParseModule = await loadPdfParseModule();
   const moduleWithCtor = pdfParseModule as unknown as { PDFParse?: PdfParseClass };
-  const moduleWithDefault = pdfParseModule as unknown as {
-    default?: (buffer: Buffer) => Promise<PdfParseTextResult>;
-  };
+  const moduleWithDefault = pdfParseModule;
 
   let text = "";
 

@@ -12,6 +12,7 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.100",
     "@prisma/client": "^6.19.3",
     "mammoth": "^1.12.0",
     "next": "^16.2.4",
