@@ -3,16 +3,13 @@ import {
   type UniversalImportRow,
   validateImportRows,
 } from "@/lib/universal-import";
-import { getOperatorNameFromSession, isAuthenticated } from "@/lib/operator-session";
+import { getOperatorNameFromSession } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
-async function ensureAuthenticated() {
-  if (!(await isAuthenticated())) {
-    return NextResponse.json({ error: "请先登录后再访问。" }, { status: 401 });
-  }
-
+async function ensureExamModeAccess() {
+  // 考试模式不包含登录模块，万能导入 V2 API 直接开放给演示用户使用。
   return null;
 }
 
@@ -28,7 +25,7 @@ function parsePagination(searchParams: URLSearchParams) {
 
 export async function GET(request: Request) {
   try {
-    const unauthorizedResponse = await ensureAuthenticated();
+    const unauthorizedResponse = await ensureExamModeAccess();
 
     if (unauthorizedResponse) {
       return unauthorizedResponse;
@@ -157,7 +154,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const unauthorizedResponse = await ensureAuthenticated();
+    const unauthorizedResponse = await ensureExamModeAccess();
 
     if (unauthorizedResponse) {
       return unauthorizedResponse;

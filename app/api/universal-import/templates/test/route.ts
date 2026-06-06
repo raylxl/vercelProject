@@ -10,20 +10,16 @@ import {
   type SupportedImportFileType,
   type UniversalImportRuleDsl,
 } from "@/lib/universal-import-engine";
-import { isAuthenticated } from "@/lib/operator-session";
 import { NextResponse } from "next/server";
 
-async function ensureAuthenticated() {
-  if (!(await isAuthenticated())) {
-    return NextResponse.json({ error: "请先登录后再访问。" }, { status: 401 });
-  }
-
+async function ensureExamModeAccess() {
+  // 考试模式不包含登录模块，试解析 API 直接开放给演示用户使用。
   return null;
 }
 
 export async function POST(request: Request) {
   try {
-    const unauthorizedResponse = await ensureAuthenticated();
+    const unauthorizedResponse = await ensureExamModeAccess();
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }

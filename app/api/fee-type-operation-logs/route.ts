@@ -1,33 +1,12 @@
-import { OPERATION_LOG_TAKE } from "@/lib/fee-type-config";
-import { isAuthenticated } from "@/lib/operator-session";
-import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
-export async function GET(request: Request) {
-  try {
-    if (!(await isAuthenticated())) {
-      return NextResponse.json({ error: "请先登录后再访问。" }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const requestedTake = Number.parseInt(
-      searchParams.get("take") ?? String(OPERATION_LOG_TAKE),
-      10,
-    );
-    const take = Number.isFinite(requestedTake)
-      ? Math.min(Math.max(requestedTake, 1), 30)
-      : OPERATION_LOG_TAKE;
-
-    const logs = await prisma.feeTypeOperationLog.findMany({
-      orderBy: {
-        createdAt: "desc",
-      },
-      take,
-    });
-
-    return NextResponse.json({ logs });
-  } catch (error) {
-    console.error("GET /api/fee-type-operation-logs failed", error);
-    return NextResponse.json({ error: "查询操作日志失败，请稍后重试。" }, { status: 500 });
-  }
+export async function GET() {
+  // 非本次考试功能：费用类型操作日志接口已停用，仅保留明确响应避免误访问。
+  return NextResponse.json(
+    {
+      error: "费用类型操作日志不属于本次考试范围，已在考试模式下停用。",
+      examMode: true,
+    },
+    { status: 410 },
+  );
 }

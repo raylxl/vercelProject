@@ -16,7 +16,6 @@ import {
   getConfiguredLlmProvider,
   isLlmConfigured,
 } from "@/lib/siliconflow";
-import { isAuthenticated } from "@/lib/operator-session";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -127,11 +126,8 @@ const RESPONSE_SCHEMA = {
   required: ["summary", "mode", "mapping", "enabledTransforms", "transformConfigs", "confidenceReport", "riskNotes"],
 } as const;
 
-async function ensureAuthenticated() {
-  if (!(await isAuthenticated())) {
-    return NextResponse.json({ error: "请先登录后再访问。" }, { status: 401 });
-  }
-
+async function ensureExamModeAccess() {
+  // 考试模式不包含登录模块，AI 规则建议 API 直接开放给演示用户使用。
   return null;
 }
 
@@ -463,7 +459,7 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
 
 export async function POST(request: Request) {
   try {
-    const unauthorizedResponse = await ensureAuthenticated();
+    const unauthorizedResponse = await ensureExamModeAccess();
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }

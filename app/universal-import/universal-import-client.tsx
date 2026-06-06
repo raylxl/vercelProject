@@ -394,7 +394,6 @@ export function UniversalImportClient({
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [existingCodeRows, setExistingCodeRows] = useState<ExistingExternalCodeEntry[]>([]);
   const [activeTab, setActiveTab] = useState<"import" | "history" | "rules">(initialTab);
-  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [ruleList, setRuleList] = useState<RuleRecord[]>([]);
   const [ruleLoading, setRuleLoading] = useState(false);
@@ -771,21 +770,6 @@ export function UniversalImportClient({
     setAiModelLabel("");
     setTemplateInfo("文件类型已变更，请重新手动选择解析规则。");
     setStatus("文件类型已变更，请重新在“选择解析规则”中选择已保存规则。");
-  }
-
-  async function handleLogout() {
-    setAuthSubmitting(true);
-    try {
-      const response = await fetch("/api/session", { method: "DELETE" });
-      if (!response.ok) {
-        throw new Error("退出登录失败，请稍后重试。");
-      }
-      window.location.reload();
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "退出登录失败，请稍后重试。");
-      pushToast("退出登录失败，请稍后重试。", "error");
-      setAuthSubmitting(false);
-    }
   }
 
   function applyRuleToState(rows: UniversalImportRow[], nextMapping: UniversalImportMapping, nextRuleDsl: UniversalImportRuleDsl, nextSheetName: string, nextFingerprint: string, nextHeaders: string[]) {
@@ -1283,7 +1267,7 @@ export function UniversalImportClient({
         <div className="sidebar-env-card">
           <div>
             <strong>{operatorName}</strong>
-            <span>已登录，当前仅保留万能导入V2相关菜单。</span>
+            <span>考试演示模式，仅保留本次考试功能菜单。</span>
           </div>
           <span className="env-toggle active" />
         </div>
@@ -1305,15 +1289,8 @@ export function UniversalImportClient({
 
           <div className="global-topbar-tools">
             <span className="global-pill">万能导入V2</span>
-            <span className="global-pill alert">已登录</span>
-            <button
-              type="button"
-              className="user-chip"
-              disabled={authSubmitting}
-              onClick={() => void handleLogout()}
-            >
-              {authSubmitting ? "退出中..." : operatorName}
-            </button>
+            <span className="global-pill alert">考试演示模式</span>
+            <span className="user-chip">{operatorName}</span>
           </div>
         </header>
 
