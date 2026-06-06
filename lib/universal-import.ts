@@ -2,7 +2,7 @@ export const UNIVERSAL_IMPORT_FIELDS = [
   {
     key: "externalCode",
     label: "外部编码",
-    required: true,
+    required: false,
     aliases: ["外部编码", "订单号", "配送单号", "配送汇总单号", "单据编号", "单号", "externalcode", "code"],
   },
   {
@@ -192,8 +192,13 @@ function isPhoneLike(value: string) {
   return /^(?:1\d{10}|(?:0\d{2,3}-?)?\d{7,8})$/.test(normalized);
 }
 
-function isPositiveInteger(value: string) {
-  return /^[1-9]\d*$/.test(value);
+function isPositiveNumber(value: string) {
+  const normalized = value.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
+    return false;
+  }
+
+  return Number.parseFloat(normalized) > 0;
 }
 
 function normalizeExternalCode(value: string) {
@@ -255,9 +260,7 @@ export function validateImportRows(
     const rowNumber = index + 1;
     const externalCode = row.externalCode.trim();
 
-    if (!externalCode) {
-      issues.push({ rowIndex: rowNumber, field: "externalCode", message: "必填项缺失" });
-    } else {
+    if (externalCode) {
       const normalized = normalizeExternalCode(externalCode);
       const existing = existingLookup.get(normalized);
 
@@ -298,8 +301,8 @@ export function validateImportRows(
 
     if (!row.skuQuantity.trim()) {
       issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必填项缺失" });
-    } else if (!isPositiveInteger(row.skuQuantity.trim())) {
-      issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必须为正整数" });
+    } else if (!isPositiveNumber(row.skuQuantity.trim())) {
+      issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必须为正数" });
     }
   });
 

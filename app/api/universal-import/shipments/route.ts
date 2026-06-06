@@ -240,7 +240,7 @@ export async function POST(request: Request) {
     >();
 
     rows.forEach((row) => {
-      const externalCode = row.externalCode.trim();
+      const externalCode = row.externalCode.trim() || `AUTO-${row.rowIndex}`;
       const current = shipmentMap.get(externalCode);
 
       if (current) {
@@ -332,7 +332,7 @@ export async function POST(request: Request) {
             sourceRowIndex: row.rowIndex,
             skuCode: row.skuCode.trim(),
             skuName: row.skuName.trim(),
-            skuQuantity: Number.parseInt(row.skuQuantity.trim(), 10),
+            skuQuantity: Number.parseFloat(row.skuQuantity.trim()),
             skuSpec: row.skuSpec.trim() || null,
             raw: row,
           })),

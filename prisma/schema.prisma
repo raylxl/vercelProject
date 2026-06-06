@@ -112,7 +112,7 @@ model UniversalImportShipmentItem {
   sourceRowIndex Int
   skuCode     String                  @db.VarChar(64)
   skuName     String                  @db.VarChar(128)
-  skuQuantity Int
+  skuQuantity Float
   skuSpec     String?                 @db.VarChar(128)
   raw         Json?
   createdAt   DateTime                @default(now())
