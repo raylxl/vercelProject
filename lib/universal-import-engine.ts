@@ -132,6 +132,12 @@ type SplitMultilineCellConfig = {
   excludeHeaderRegex?: string;
 };
 
+type GroupByExternalCodeConfig = {
+  keyField?: UniversalImportField;
+  inheritBlankKey?: boolean;
+  inheritedFields?: UniversalImportField[];
+};
+
 function normalizeCell(value: unknown) {
   return String(value ?? "").trim();
 }
@@ -207,6 +213,18 @@ function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): U
     ...values,
     rowIndex,
   };
+}
+
+function normalizeFieldList(value: unknown, fallback: UniversalImportField[]) {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+
+  const fields = value
+    .map((item) => String(item))
+    .filter(isImportField);
+
+  return fields.length > 0 ? fields : fallback;
 }
 
 function asNumber(value: unknown, fallback: number) {
@@ -1111,6 +1129,58 @@ function parseTextRecords(
   return output;
 }
 
+function getFirstNonEmptyGroupValue(rows: UniversalImportRow[], field: UniversalImportField) {
+  return rows.map((row) => normalizeCell(row[field])).find(Boolean) ?? "";
+}
+
+function applyGroupByExternalCode(rows: UniversalImportRow[], config: GroupByExternalCodeConfig | undefined) {
+  const keyField = config?.keyField && isImportField(config.keyField) ? config.keyField : "externalCode";
+  const inheritedFields = normalizeFieldList(config?.inheritedFields, [
+    "receiverStore",
+    "receiverName",
+    "receiverPhone",
+    "receiverAddress",
+    "note",
+  ]);
+  const groups = new Map<string, UniversalImportRow[]>();
+  let lastSeenKey = "";
+
+  rows.forEach((row) => {
+    const explicitKey = normalizeCell(row[keyField]);
+    const groupKey = explicitKey || (config?.inheritBlankKey ? lastSeenKey : "");
+
+    if (!groupKey) {
+      return;
+    }
+
+    if (!explicitKey && config?.inheritBlankKey && keyField === "externalCode") {
+      row.externalCode = groupKey;
+    }
+
+    lastSeenKey = groupKey;
+    const current = groups.get(groupKey) ?? [];
+    current.push(row);
+    groups.set(groupKey, current);
+  });
+
+  groups.forEach((groupRows) => {
+    inheritedFields.forEach((field) => {
+      const value = getFirstNonEmptyGroupValue(groupRows, field);
+      if (!value) {
+        return;
+      }
+
+      groupRows.forEach((row) => {
+        if (!normalizeCell(row[field])) {
+          row[field] = value;
+        }
+      });
+    });
+  });
+
+  return rows;
+}
+
 function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImportRuleDsl) {
   const rule = normalizeRuleDsl(rawRule);
   const rows: UniversalImportRow[] = [];
@@ -1121,6 +1191,7 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
   const splitCellTransform = getTransform(rule, "split_multiline_cell");
   const cardTransform = getTransform(rule, "card_split");
   const textTransform = getTransform(rule, "text_record_split");
+  const groupTransform = getTransform(rule, "group_by_external_code");
   const useAllSheets = Boolean(getTransform(rule, "multisheet_merge"));
   const sections = useAllSheets ? document.sections : document.sections.slice(0, 1);
   const compositeHeaderConfig = getFirstCompositeTransformConfig(rule, ["headerMapping", "header_mapping"]);
@@ -1134,10 +1205,13 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
     rows: [],
     text: document.textContent,
   }, effectiveTailConfig) : {};
+  let textRowCount = 0;
 
   if (textTransform) {
-    rows.push(...parseTextRecords(document, textTransform.config as TextRecordSplitConfig, rows.length, globalTailValues));
-    summaries.push("rule:text_record_split");
+    const textRows = parseTextRecords(document, textTransform.config as TextRecordSplitConfig, rows.length, globalTailValues);
+    textRowCount = textRows.length;
+    rows.push(...textRows);
+    summaries.push(textRowCount > 0 ? "rule:text_record_split" : "rule:text_record_split:no_rows");
   }
 
   sections.forEach((section) => {
@@ -1161,7 +1235,7 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
     const canEmitHeaderWithMatrix = !matrixTransform || Boolean(effectiveHeaderConfig?.emitWithMatrix);
     const canEmitHeaderWithSplitCell = !splitCellTransform || Boolean(effectiveHeaderConfig?.emitWithSplitMultilineCell);
     const canEmitHeaderWithCard = !cardTransform || Boolean(effectiveHeaderConfig?.emitWithCard);
-    const canEmitHeaderWithText = !textTransform || Boolean(effectiveHeaderConfig?.emitWithText);
+    const canEmitHeaderWithText = !textTransform || textRowCount === 0 || Boolean(effectiveHeaderConfig?.emitWithText);
 
     if (hasEffectiveHeader && canEmitHeaderWithMatrix && canEmitHeaderWithSplitCell && canEmitHeaderWithCard && canEmitHeaderWithText) {
       rows.push(...parseRowsByMapping(section, rule, effectiveHeaderConfig, tailValues, rows.length));
@@ -1179,6 +1253,11 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
     };
     rows.push(...parseTextItems(document.textContent, fallbackItemConfig, globalTailValues, 0));
     summaries.push("rule:text_fallback");
+  }
+
+  if (groupTransform) {
+    applyGroupByExternalCode(rows, groupTransform.config as GroupByExternalCodeConfig | undefined);
+    summaries.push("rule:group_by_external_code");
   }
 
   return {

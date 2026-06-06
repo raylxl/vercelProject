@@ -82,6 +82,11 @@ export type ExistingExternalCodeEntry = {
   batchCreatedAt?: string;
 };
 
+type GroupedRowEntry = {
+  rowIndex: number;
+  row: UniversalImportRow;
+};
+
 export const UNIVERSAL_IMPORT_FIELD_LABELS = Object.fromEntries(
   UNIVERSAL_IMPORT_FIELDS.map((field) => [field.key, field.label]),
 ) as Record<UniversalImportField, string>;
@@ -205,6 +210,61 @@ function normalizeExternalCode(value: string) {
   return value.trim().toLowerCase();
 }
 
+function normalizeGroupFieldValue(value: string) {
+  return value.trim();
+}
+
+function getDistinctNonEmptyValues(rows: GroupedRowEntry[], field: UniversalImportField) {
+  return Array.from(
+    new Set(
+      rows
+        .map((entry) => normalizeGroupFieldValue(entry.row[field]))
+        .filter(Boolean),
+    ),
+  );
+}
+
+function pushGroupConsistencyIssues(
+  issues: UniversalImportIssue[],
+  groupedEntries: GroupedRowEntry[],
+  field: UniversalImportField,
+  message: string,
+) {
+  groupedEntries.forEach((entry) => {
+    issues.push({
+      rowIndex: entry.rowIndex,
+      field,
+      message,
+    });
+  });
+}
+
+function getGroupedReceiverSummary(groupedEntries: GroupedRowEntry[]) {
+  const storeValues = getDistinctNonEmptyValues(groupedEntries, "receiverStore");
+  const nameValues = getDistinctNonEmptyValues(groupedEntries, "receiverName");
+  const phoneValues = getDistinctNonEmptyValues(groupedEntries, "receiverPhone");
+  const addressValues = getDistinctNonEmptyValues(groupedEntries, "receiverAddress");
+
+  return {
+    storeValues,
+    nameValues,
+    phoneValues,
+    addressValues,
+    hasStoreGroup: storeValues.length > 0,
+    hasReceiverGroup: nameValues.length > 0 && phoneValues.length > 0 && addressValues.length > 0,
+  };
+}
+
+export function countAggregatedShipments(rows: UniversalImportRow[]) {
+  return rows.reduce((count, row) => {
+    if (row.externalCode.trim()) {
+      return count;
+    }
+
+    return count + 1;
+  }, new Set(rows.map((row) => normalizeExternalCode(row.externalCode)).filter(Boolean)).size);
+}
+
 function getDuplicateSourceLabel(entry: ExistingExternalCodeEntry) {
   if (entry.rowIndex) {
     return entry.batchName ? `历史批次“${entry.batchName}”第 ${entry.rowIndex} 行` : `历史第 ${entry.rowIndex} 行`;
@@ -244,7 +304,7 @@ export function validateImportRows(
 ) {
   const issues: UniversalImportIssue[] = [];
   const existingLookup = normalizeExistingExternalCodes(existingExternalCodes);
-  const groupedRows = new Map<string, number[]>();
+  const groupedRows = new Map<string, GroupedRowEntry[]>();
 
   rows.forEach((row, index) => {
     const externalCode = row.externalCode.trim();
@@ -254,7 +314,10 @@ export function validateImportRows(
 
     const normalized = normalizeExternalCode(externalCode);
     const current = groupedRows.get(normalized) ?? [];
-    current.push(index + 1);
+    current.push({
+      rowIndex: index + 1,
+      row,
+    });
     groupedRows.set(normalized, current);
   });
 
@@ -264,16 +327,8 @@ export function validateImportRows(
 
     if (externalCode) {
       const normalized = normalizeExternalCode(externalCode);
-      const duplicateRows = groupedRows.get(normalized) ?? [];
+      const groupedEntries = groupedRows.get(normalized) ?? [];
       const existing = existingLookup.get(normalized);
-
-      if (duplicateRows.length > 1) {
-        issues.push({
-          rowIndex: rowNumber,
-          field: "externalCode",
-          message: `与本批次第 ${duplicateRows.join("、")} 行外部编码重复`,
-        });
-      }
 
       if (existing) {
         issues.push({
@@ -290,7 +345,7 @@ export function validateImportRows(
       Boolean(row.receiverPhone.trim()) &&
       Boolean(row.receiverAddress.trim());
 
-    if (!hasStoreGroup && !hasReceiverGroup) {
+    if (!externalCode && !hasStoreGroup && !hasReceiverGroup) {
       issues.push({
         rowIndex: rowNumber,
         field: "receiverStore",
@@ -314,6 +369,41 @@ export function validateImportRows(
       issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必填项缺失" });
     } else if (!isPositiveNumber(row.skuQuantity.trim())) {
       issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必须为正数" });
+    }
+  });
+
+  groupedRows.forEach((groupedEntries) => {
+    const groupedReceiver = getGroupedReceiverSummary(groupedEntries);
+
+    if (!groupedReceiver.hasStoreGroup && !groupedReceiver.hasReceiverGroup) {
+      pushGroupConsistencyIssues(
+        issues,
+        groupedEntries,
+        "receiverStore",
+        "同一外部编码下的 SKU 需共享一组完整收货信息：收货门店，或收件人姓名 + 电话 + 地址",
+      );
+    }
+
+    if (groupedReceiver.storeValues.length > 1) {
+      pushGroupConsistencyIssues(
+        issues,
+        groupedEntries,
+        "receiverStore",
+        "同一外部编码下的收货门店不一致，应共享同一组收货信息",
+      );
+    }
+
+    const receiverFields: UniversalImportField[] = ["receiverName", "receiverPhone", "receiverAddress"];
+    const inconsistentReceiverField = receiverFields.find(
+      (field) => getDistinctNonEmptyValues(groupedEntries, field).length > 1,
+    );
+    if (inconsistentReceiverField) {
+      pushGroupConsistencyIssues(
+        issues,
+        groupedEntries,
+        inconsistentReceiverField,
+        "同一外部编码下的收件人信息不一致，应共享同一组收货信息",
+      );
     }
   });
 

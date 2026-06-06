@@ -423,7 +423,7 @@ function createFallbackSuggestion(
     : suggestedMapping;
   const headerRecommendedRule = applyHeaderRecommendation(suggestedRule, headerRowIndex, effectiveMapping);
   const tailRecommended = applyKeyValueExtractionRecommendation(headerRecommendedRule, document);
-  const recommendedRule = tailRecommended.rule;
+  const recommendedRule = ensureGroupByExternalCode(tailRecommended.rule);
   const confidenceReport = UNIVERSAL_IMPORT_FIELDS.map((field) => ({
     field: field.key,
     confidence:
@@ -603,6 +603,43 @@ function ensureMultiSectionMerge(rule: UniversalImportRuleDsl, sectionCount: num
   };
 }
 
+function ensureGroupByExternalCode(rule: UniversalImportRuleDsl) {
+  const rowProducerTypes: UniversalImportRuleDsl["transforms"][number]["type"][] = [
+    "header_mapping",
+    "matrix_pivot",
+    "split_multiline_cell",
+    "card_split",
+    "text_record_split",
+  ];
+  const hasRowProducer = rule.transforms.some((transform) => transform.enabled && rowProducerTypes.includes(transform.type));
+
+  if (!hasRowProducer) {
+    return rule;
+  }
+
+  return {
+    ...rule,
+    transforms: rule.transforms.map((transform) =>
+      transform.type === "group_by_external_code"
+        ? {
+            ...transform,
+            enabled: true,
+            config: {
+              ...(transform.config ?? {}),
+              inheritedFields: [
+                "receiverStore",
+                "receiverName",
+                "receiverPhone",
+                "receiverAddress",
+                "note",
+              ],
+            },
+          }
+        : transform,
+    ),
+  };
+}
+
 function summarizeDocumentStructure(document: Awaited<ReturnType<typeof parseImportDocument>>) {
   const firstSection = document.sections[0];
   const headRows = firstSection?.rows.slice(0, 8) ?? [];
@@ -761,7 +798,7 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
   );
   const headerRecommendedRule = applyHeaderRecommendation(mergedRule, headerRowIndex, mapping);
   const tailRecommended = applyKeyValueExtractionRecommendation(headerRecommendedRule, document);
-  const suggestedRule = tailRecommended.rule;
+  const suggestedRule = ensureGroupByExternalCode(tailRecommended.rule);
 
   const normalizedConfidenceReport =
       confidenceReport?.map((item) => ({

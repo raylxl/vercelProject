@@ -8,6 +8,32 @@
 - 源码仓库：git@github.com:raylxl/vercelProject.git
 - 默认入口：`/` 自动跳转到 `/universal-import`
 
+## 考试技术要求对应关系
+
+以下结论按当前仓库代码、当前生产地址和当前环境配置逐项核对。
+
+| 考试要求 | 当前实现 | 对应位置 | 结论 |
+| --- | --- | --- | --- |
+| 技术栈：Next.js App Router + TypeScript | 项目基于 `next`、`react`、`typescript`，页面与接口均采用 App Router 目录结构。 | `package.json`、`app/`、`app/api/` | 满足 |
+| 部署：Vercel，提供可访问 URL | 已部署到 Vercel，当前生产地址可访问：`https://vercelproject-roan-theta.vercel.app`。`vercel.json` 已声明 Next.js 构建命令。 | `vercel.json`、生产地址 | 满足 |
+| UI 风格：与鲸天系统保持一致，主色 `#0fc6c2`、圆角卡片、清爽蓝绿色调 | 全局样式使用 `#0fc6c2` 作为主色，页面采用圆角卡片、浅蓝绿色背景、管理后台式布局。页签标题和考试菜单已收敛为“智能多格式批量下单系统”。 | `app/globals.css`、`app/layout.tsx`、`app/universal-import/universal-import-client.tsx` | 满足 |
+| 大模型：通过 API 调用 DeepSeek / GPT / Claude 等，将文件内容转为结构化下单数据 | 当前实现通过服务端 API 调用 DeepSeek 官网或 SiliconFlow。AI 先生成可编辑解析规则，再由规则解释器将文件转为结构化下单数据。不是前端假数据。 | `lib/siliconflow.ts`、`app/api/universal-import/templates/ai-suggest/route.ts`、`app/api/universal-import/templates/test/route.ts` | 满足 |
+| 数据库：Neon / Supabase / Turso 等，通过 Vercel Marketplace 集成 | 当前代码通过 Prisma + PostgreSQL 持久化规则、批次、运单、SKU 明细。当前环境变量使用云端 Postgres 连接串，功能层面满足“云数据库持久化”。但若考试严格要求“必须明确展示为 Vercel Marketplace 中的 Neon / Supabase / Turso 某一项”，则还需要在答辩时补充对应集成截图或在 README 中附上具体数据库产品名称。 | `prisma/schema.prisma`、`lib/prisma.ts`、`.env.local` 中 `DATABASE_URL` | 部分满足 |
+
+### 技术要求结论
+
+- `Next.js App Router + TypeScript`：满足
+- `Vercel 生产部署并提供 URL`：满足
+- `鲸天系统风格 UI`：满足
+- `大模型 API 真实接入`：满足
+- `数据库通过云端持久化`：满足
+- `数据库产品与 Vercel Marketplace 对应关系的证明材料`：当前仓库内未直接保留 Marketplace 截图或数据库产品说明，因此按考试“材料完整度”口径记为部分满足
+
+### 建议答辩口径
+
+- 如果考官关注“有没有数据库”，当前项目可以明确回答：有，规则、导入批次、运单、SKU 明细都已落库。
+- 如果考官继续追问“是不是通过 Vercel Marketplace 接的哪一家”，建议补一张 Vercel Project Storage / Marketplace 的截图，或把实际数据库供应商名称补进本文档，这样这一项就能从“部分满足”提升为“完全满足”。
+
 ## 核心能力
 
 - 规则管理：解析规则持久化到 PostgreSQL，支持新建、编辑、删除、复制。

@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import Link from "next/link";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
+  countAggregatedShipments,
   UNIVERSAL_IMPORT_FIELDS,
   UNIVERSAL_IMPORT_FIELD_LABELS,
   formatIssueLabel,
@@ -193,7 +194,18 @@ type SubmitSummary = {
   successCount: number;
   failCount: number;
   shipmentCount: number;
+  failedShipmentCount: number;
   submittedAt: string;
+};
+
+type AggregatedPreviewShipment = {
+  key: string;
+  externalCode: string;
+  receiverLabel: string;
+  rowCount: number;
+  skuCount: number;
+  quantityTotal: number;
+  rowIndexes: number[];
 };
 
 type ToastItem = {
@@ -260,6 +272,49 @@ function toDraftRows(rows: UniversalImportRow[]) {
     rowIndex: index + 1,
     id: createRowId(),
   }));
+}
+
+function getDraftReceiverLabel(row: UniversalImportRow) {
+  return (
+    row.receiverStore.trim() ||
+    [row.receiverName.trim(), row.receiverPhone.trim()].filter(Boolean).join(" / ") ||
+    row.receiverAddress.trim() ||
+    "-"
+  );
+}
+
+function buildAggregatedPreviewShipments(rows: DraftRow[]): AggregatedPreviewShipment[] {
+  const grouped = new Map<string, AggregatedPreviewShipment>();
+
+  rows.forEach((row, index) => {
+    const externalCode = row.externalCode.trim();
+    const key = externalCode ? `external:${externalCode.toLowerCase()}` : `row:${row.id}`;
+    const quantity = Number.parseFloat(row.skuQuantity.trim());
+    const current =
+      grouped.get(key) ??
+      {
+        key,
+        externalCode: externalCode || `AUTO-${row.rowIndex || index + 1}`,
+        receiverLabel: getDraftReceiverLabel(row),
+        rowCount: 0,
+        skuCount: 0,
+        quantityTotal: 0,
+        rowIndexes: [],
+      };
+
+    current.rowCount += 1;
+    current.skuCount += row.skuCode.trim() || row.skuName.trim() ? 1 : 0;
+    current.quantityTotal += Number.isFinite(quantity) ? quantity : 0;
+    current.rowIndexes.push(row.rowIndex || index + 1);
+
+    if (current.receiverLabel === "-" && getDraftReceiverLabel(row) !== "-") {
+      current.receiverLabel = getDraftReceiverLabel(row);
+    }
+
+    grouped.set(key, current);
+  });
+
+  return Array.from(grouped.values());
 }
 
 function toSafeSheetName(name: string) {
@@ -722,7 +777,16 @@ export function UniversalImportClient({
     [draftRows, previewRenderLimit],
   );
   const hiddenPreviewRowCount = Math.max(draftRows.length - visibleDraftRows.length, 0);
-  const groupedPreviewCount = useMemo(() => new Set(draftRows.map((row) => row.externalCode.trim())).size, [draftRows]);
+  const groupedPreviewCount = useMemo(() => countAggregatedShipments(draftRows), [draftRows]);
+  const aggregatedPreviewShipments = useMemo(
+    () => buildAggregatedPreviewShipments(draftRows),
+    [draftRows],
+  );
+  const visibleAggregatedPreviewShipments = aggregatedPreviewShipments.slice(0, 80);
+  const hiddenAggregatedPreviewCount = Math.max(
+    aggregatedPreviewShipments.length - visibleAggregatedPreviewShipments.length,
+    0,
+  );
   const activeColumnOptions = columnOptions.length > 0 ? columnOptions : toColumnOptions(headers);
   const activeHeaderRowIndex = getRuleHeaderRowIndex(ruleDsl);
   const aiConfidenceByField = useMemo(
@@ -1479,7 +1543,12 @@ export function UniversalImportClient({
       });
       const data = (await response.json()) as {
         error?: string;
-        summary?: { successCount: number; failCount: number; shipmentCount: number };
+        summary?: {
+          successCount: number;
+          failCount: number;
+          shipmentCount: number;
+          failedShipmentCount: number;
+        };
       };
       if (!response.ok) {
         throw new Error(data.error ?? "提交导入失败，请稍后重试。");
@@ -1500,6 +1569,7 @@ export function UniversalImportClient({
         successCount: data.summary?.successCount ?? draftRows.length,
         failCount: data.summary?.failCount ?? 0,
         shipmentCount: data.summary?.shipmentCount ?? 0,
+        failedShipmentCount: data.summary?.failedShipmentCount ?? 0,
         submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
       });
       pushToast(`成功提交 ${data.summary?.shipmentCount ?? 0} 个运单`, "success");
@@ -2005,8 +2075,41 @@ export function UniversalImportClient({
                         </div>
                       </div>
                     ) : (
-                      <div className="table-shell import-table-shell">
-                        <table className="data-table import-table">
+                      <>
+                        <div className="table-shell shipment-preview-shell">
+                          <table className="data-table shipment-preview-table">
+                            <thead>
+                              <tr>
+                                <th>出库单 / 外部编码</th>
+                                <th>共享收货信息</th>
+                                <th>SKU 行数</th>
+                                <th>SKU 件数合计</th>
+                                <th>来源行号</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {visibleAggregatedPreviewShipments.map((shipment) => (
+                                <tr key={shipment.key}>
+                                  <td>{shipment.externalCode}</td>
+                                  <td>{shipment.receiverLabel}</td>
+                                  <td>{shipment.skuCount}</td>
+                                  <td>{shipment.quantityTotal || "-"}</td>
+                                  <td>{shipment.rowIndexes.join(", ")}</td>
+                                </tr>
+                              ))}
+                              {hiddenAggregatedPreviewCount > 0 ? (
+                                <tr>
+                                  <td colSpan={5} className="empty-row">
+                                    还有 {hiddenAggregatedPreviewCount} 个聚合出库单未展开，全部数据仍会参与校验、导出和提交。
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="table-shell import-table-shell">
+                          <table className="data-table import-table">
                           <thead>
                             <tr>
                               <th className="checkbox-cell">
@@ -2070,8 +2173,9 @@ export function UniversalImportClient({
                               );
                             })}
                           </tbody>
-                        </table>
-                      </div>
+                          </table>
+                        </div>
+                      </>
                     )}
 
                     {hiddenPreviewRowCount > 0 ? (
@@ -2232,6 +2336,10 @@ export function UniversalImportClient({
                       <div>
                         <span>生成运单</span>
                         <strong>{submitSummary.shipmentCount}</strong>
+                      </div>
+                      <div>
+                        <span>失败运单</span>
+                        <strong>{submitSummary.failedShipmentCount}</strong>
                       </div>
                       <div>
                         <span>提交时间</span>

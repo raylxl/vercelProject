@@ -9,6 +9,27 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
+type ShipmentDraft = {
+  externalCode: string;
+  receiverStore: string | null;
+  receiverName: string | null;
+  receiverPhone: string | null;
+  receiverAddress: string | null;
+  note: string | null;
+  sourceRowCount: number;
+  rows: UniversalImportRow[];
+};
+
+type ShipmentSubmitResult = {
+  externalCode: string;
+  receiverLabel: string;
+  sourceRowCount: number;
+  status: "success" | "failed";
+  shipmentId?: string;
+  rowIndexes: number[];
+  error?: string;
+};
+
 async function ensureExamModeAccess() {
   // 考试模式不包含登录模块，万能导入 V2 API 直接开放给演示用户使用。
   return null;
@@ -22,6 +43,15 @@ function parsePagination(searchParams: URLSearchParams) {
   );
 
   return { page, pageSize };
+}
+
+function buildReceiverLabel(shipment: ShipmentDraft) {
+  return (
+    shipment.receiverStore ||
+    shipment.receiverName ||
+    shipment.receiverAddress ||
+    "未填写收货信息"
+  );
 }
 
 export async function GET(request: Request) {
@@ -234,19 +264,7 @@ export async function POST(request: Request) {
     const operatorName = await getOperatorNameFromSession();
     const batchName = body.batchName?.trim() || body.originalFileName?.trim() || "智能多格式批量下单批次";
 
-    const shipmentMap = new Map<
-      string,
-      {
-        externalCode: string;
-        receiverStore: string | null;
-        receiverName: string | null;
-        receiverPhone: string | null;
-        receiverAddress: string | null;
-        note: string | null;
-        sourceRowCount: number;
-        rows: UniversalImportRow[];
-      }
-    >();
+    const shipmentMap = new Map<string, ShipmentDraft>();
 
     rows.forEach((row) => {
       const externalCode = row.externalCode.trim() || `AUTO-${row.rowIndex}`;
@@ -309,67 +327,116 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      const batch = await tx.universalImportBatch.create({
-        data: {
-          batchName,
-          originalFileName: body.originalFileName?.trim() || "",
-          sourceSheetName: body.sheetName?.trim() || "",
-          fileType: body.fileType?.trim() || "excel",
-          ruleId: rule?.id ?? null,
-          ruleVersion: rule?.version ?? null,
-          totalRows: rows.length,
-          successRows: rows.length,
-          failedRows: 0,
-          status: "COMPLETED",
-          parseSummary: {
-            headers: (body.headers ?? []).map((header) => String(header ?? "")),
-            fingerprint: body.fingerprint ?? "",
-            mapping: (body.mapping ?? {}) as Prisma.InputJsonValue,
-            shipmentCount: shipmentMap.size,
-          } as Prisma.InputJsonValue,
-          createdBy: operatorName,
-        },
-      });
+    const batch = await prisma.universalImportBatch.create({
+      data: {
+        batchName,
+        originalFileName: body.originalFileName?.trim() || "",
+        sourceSheetName: body.sheetName?.trim() || "",
+        fileType: body.fileType?.trim() || "excel",
+        ruleId: rule.id,
+        ruleVersion: rule.version,
+        totalRows: rows.length,
+        successRows: 0,
+        failedRows: rows.length,
+        status: "PROCESSING",
+        parseSummary: {
+          headers: (body.headers ?? []).map((header) => String(header ?? "")),
+          fingerprint: body.fingerprint ?? "",
+          mapping: (body.mapping ?? {}) as Prisma.InputJsonValue,
+          shipmentCount: shipmentMap.size,
+        } as Prisma.InputJsonValue,
+        createdBy: operatorName,
+      },
+    });
 
-      for (const shipment of shipmentMap.values()) {
-        const createdShipment = await tx.universalImportShipment.create({
-          data: {
-            batchId: batch.id,
-            externalCode: shipment.externalCode,
-            receiverStore: shipment.receiverStore,
-            receiverName: shipment.receiverName,
-            receiverPhone: shipment.receiverPhone,
-            receiverAddress: shipment.receiverAddress,
-            note: shipment.note,
-            sourceRowCount: shipment.sourceRowCount,
-            raw: shipment.rows,
-          },
+    const shipmentResults: ShipmentSubmitResult[] = [];
+
+    for (const shipment of shipmentMap.values()) {
+      try {
+        const createdShipment = await prisma.$transaction(async (tx) => {
+          const nextShipment = await tx.universalImportShipment.create({
+            data: {
+              batchId: batch.id,
+              externalCode: shipment.externalCode,
+              receiverStore: shipment.receiverStore,
+              receiverName: shipment.receiverName,
+              receiverPhone: shipment.receiverPhone,
+              receiverAddress: shipment.receiverAddress,
+              note: shipment.note,
+              sourceRowCount: shipment.sourceRowCount,
+              raw: shipment.rows,
+            },
+          });
+
+          await tx.universalImportShipmentItem.createMany({
+            data: shipment.rows.map((row) => ({
+              shipmentId: nextShipment.id,
+              sourceRowIndex: row.rowIndex,
+              skuCode: row.skuCode.trim(),
+              skuName: row.skuName.trim(),
+              skuQuantity: Number.parseFloat(row.skuQuantity.trim()),
+              skuSpec: row.skuSpec.trim() || null,
+              raw: row,
+            })),
+          });
+
+          return nextShipment;
         });
 
-        await tx.universalImportShipmentItem.createMany({
-          data: shipment.rows.map((row) => ({
-            shipmentId: createdShipment.id,
-            sourceRowIndex: row.rowIndex,
-            skuCode: row.skuCode.trim(),
-            skuName: row.skuName.trim(),
-            skuQuantity: Number.parseFloat(row.skuQuantity.trim()),
-            skuSpec: row.skuSpec.trim() || null,
-            raw: row,
-          })),
+        shipmentResults.push({
+          externalCode: shipment.externalCode,
+          receiverLabel: buildReceiverLabel(shipment),
+          sourceRowCount: shipment.sourceRowCount,
+          status: "success",
+          shipmentId: createdShipment.id,
+          rowIndexes: shipment.rows.map((row) => row.rowIndex),
+        });
+      } catch (shipmentError) {
+        shipmentResults.push({
+          externalCode: shipment.externalCode,
+          receiverLabel: buildReceiverLabel(shipment),
+          sourceRowCount: shipment.sourceRowCount,
+          status: "failed",
+          rowIndexes: shipment.rows.map((row) => row.rowIndex),
+          error: shipmentError instanceof Error ? shipmentError.message : "运单入库失败",
         });
       }
+    }
 
-      return batch;
+    const successShipments = shipmentResults.filter((item) => item.status === "success");
+    const failedShipments = shipmentResults.filter((item) => item.status === "failed");
+    const successCount = successShipments.reduce((total, item) => total + item.sourceRowCount, 0);
+    const failCount = failedShipments.reduce((total, item) => total + item.sourceRowCount, 0);
+
+    const result = await prisma.universalImportBatch.update({
+      where: {
+        id: batch.id,
+      },
+      data: {
+        successRows: successCount,
+        failedRows: failCount,
+        status: failedShipments.length === 0 ? "COMPLETED" : successShipments.length === 0 ? "FAILED" : "PARTIAL_FAILED",
+        parseSummary: {
+          headers: (body.headers ?? []).map((header) => String(header ?? "")),
+          fingerprint: body.fingerprint ?? "",
+          mapping: (body.mapping ?? {}) as Prisma.InputJsonValue,
+          shipmentCount: shipmentMap.size,
+          successShipmentCount: successShipments.length,
+          failedShipmentCount: failedShipments.length,
+          shipmentResults,
+        } as Prisma.InputJsonValue,
+      },
     });
 
     return NextResponse.json({
       batch: result,
       summary: {
-        successCount: rows.length,
-        failCount: 0,
-        shipmentCount: shipmentMap.size,
+        successCount,
+        failCount,
+        shipmentCount: successShipments.length,
+        failedShipmentCount: failedShipments.length,
       },
+      results: shipmentResults,
     });
   } catch (error) {
     console.error("POST /api/universal-import/shipments failed", error);
