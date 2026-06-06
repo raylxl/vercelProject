@@ -141,6 +141,11 @@ function createFallbackSuggestion(
   document: Awaited<ReturnType<typeof parseImportDocument>>,
 ): AiSuggestSuccessResponse {
   const suggestedRule = createDefaultRuleDsl(suggestedMapping, fileType);
+  const confidenceReport = UNIVERSAL_IMPORT_FIELDS.map((field) => ({
+    field: field.key,
+    confidence: typeof suggestedMapping[field.key] === "number" ? 0.92 : 0.45,
+    source: typeof suggestedMapping[field.key] === "number" ? "header-match" : "heuristic-fallback",
+  }));
 
   return {
     documentSummary: {
@@ -151,12 +156,11 @@ function createFallbackSuggestion(
       sectionCount: document.sections.length,
       textPreview: document.textContent.slice(0, 800),
     },
-    suggestedRule,
-    confidenceReport: UNIVERSAL_IMPORT_FIELDS.map((field) => ({
-      field: field.key,
-      confidence: typeof suggestedMapping[field.key] === "number" ? 0.92 : 0.45,
-      source: typeof suggestedMapping[field.key] === "number" ? "header-match" : "heuristic-fallback",
-    })),
+    suggestedRule: {
+      ...suggestedRule,
+      aiConfidenceReport: confidenceReport,
+    },
+    confidenceReport,
     riskNotes: [
       fileType !== "excel" ? "当前为非 Excel 文档，部分字段来自文本结构推断，建议人工确认。" : "",
       document.sections.length > 1 ? "检测到多段或多 Sheet 内容，建议开启多 Sheet 合并或卡片拆分规则。" : "",
@@ -434,9 +438,7 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
     normalizeEnabledTransforms(parsed.enabledTransforms),
   ), isRecord(parsed.transformConfigs) ? parsed.transformConfigs as Record<string, Record<string, unknown>> : undefined), document.sections.length);
 
-  return {
-    suggestedRule,
-    confidenceReport:
+  const normalizedConfidenceReport =
       confidenceReport?.map((item) => ({
         field: item.field,
         confidence: Math.max(0, Math.min(1, item.confidence)),
@@ -446,7 +448,14 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
         field: field.key,
         confidence: typeof mapping[field.key] === "number" ? 0.8 : 0.3,
         source: "llm-default",
-      })),
+      }));
+
+  return {
+    suggestedRule: {
+      ...suggestedRule,
+      aiConfidenceReport: normalizedConfidenceReport,
+    },
+    confidenceReport: normalizedConfidenceReport,
     riskNotes,
     aiSummary: parsed.summary,
   };

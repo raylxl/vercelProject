@@ -48,6 +48,11 @@ export type UniversalImportRuleDsl = {
     config?: Record<string, unknown>;
   }>;
   mapping: UniversalImportMapping;
+  aiConfidenceReport?: Array<{
+    field: UniversalImportField;
+    confidence: number;
+    source: string;
+  }>;
 };
 
 export type RuleExecutionResult = {

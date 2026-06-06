@@ -15,6 +15,7 @@ import {
   validateImportRows,
 } from "@/lib/universal-import";
 import type {
+  RuleTransformType,
   SupportedImportFileType,
   UniversalImportRuleDsl,
 } from "@/lib/universal-import-engine";
@@ -73,6 +74,7 @@ type RuleRecord = {
   status: string;
   mapping: UniversalImportMapping;
   ruleDsl?: UniversalImportRuleDsl | null;
+  sampleMeta?: unknown;
   updatedAt: string;
   createdAt: string;
   _count?: {
@@ -122,16 +124,18 @@ type AiSuggestResponse = {
     sectionCount: number;
   };
   suggestedRule?: UniversalImportRuleDsl;
-  confidenceReport?: Array<{
-    field: UniversalImportField;
-    confidence: number;
-    source: string;
-  }>;
+  confidenceReport?: AiConfidenceItem[];
   riskNotes?: string[];
   provider?: string;
   model?: string;
   aiSummary?: string;
   error?: string;
+};
+
+type AiConfidenceItem = {
+  field: UniversalImportField;
+  confidence: number;
+  source: string;
 };
 
 type HistoryFilters = {
@@ -248,6 +252,19 @@ function normalizeMapping(raw: unknown): UniversalImportMapping | null {
   ) as UniversalImportMapping;
 }
 
+function getSampleHeaders(sampleMeta: unknown) {
+  if (!sampleMeta || typeof sampleMeta !== "object") {
+    return [];
+  }
+
+  const headers = (sampleMeta as { headers?: unknown }).headers;
+  if (!Array.isArray(headers)) {
+    return [];
+  }
+
+  return headers.map((header) => String(header ?? ""));
+}
+
 function buildDefaultRuleDsl(mapping: UniversalImportMapping, fileType: SupportedImportFileType): UniversalImportRuleDsl {
   return {
     fileType,
@@ -286,6 +303,42 @@ function formatFileTypeLabel(value: string) {
   }
 
   return "Excel";
+}
+
+function formatTransformConfig(config: Record<string, unknown> | undefined) {
+  return JSON.stringify(config ?? {}, null, 2);
+}
+
+function getAiMappingStatus(item: AiConfidenceItem | undefined) {
+  if (!item) {
+    return {
+      label: "需确认",
+      tone: "warning",
+      detail: "AI 未返回置信度，请人工确认",
+    };
+  }
+
+  if (item.confidence >= 0.85) {
+    return {
+      label: "高置信",
+      tone: "success",
+      detail: `${Math.round(item.confidence * 100)}% / ${item.source}`,
+    };
+  }
+
+  if (item.confidence >= 0.55) {
+    return {
+      label: "AI推测",
+      tone: "info",
+      detail: `${Math.round(item.confidence * 100)}% / ${item.source}`,
+    };
+  }
+
+  return {
+    label: "需确认",
+    tone: "warning",
+    detail: `${Math.round(item.confidence * 100)}% / ${item.source}`,
+  };
 }
 
 function formatReceiverSummary(record: ShipmentHistoryRecord) {
@@ -352,9 +405,10 @@ export function UniversalImportClient({
   const [aiSummary, setAiSummary] = useState("");
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [aiRiskNotes, setAiRiskNotes] = useState<string[]>([]);
-  const [aiConfidenceReport, setAiConfidenceReport] = useState<Array<{ field: UniversalImportField; confidence: number; source: string }>>([]);
+  const [aiConfidenceReport, setAiConfidenceReport] = useState<AiConfidenceItem[]>([]);
   const [aiProviderLabel, setAiProviderLabel] = useState("");
   const [aiModelLabel, setAiModelLabel] = useState("");
+  const [transformConfigDrafts, setTransformConfigDrafts] = useState<Record<string, string>>({});
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
     "智能多格式批量下单系统",
   ]);
@@ -414,6 +468,11 @@ export function UniversalImportClient({
   const selectedCount = selectedIds.length;
   const totalCount = draftRows.length;
   const groupedPreviewCount = useMemo(() => new Set(draftRows.map((row) => row.externalCode.trim())).size, [draftRows]);
+  const aiConfidenceByField = useMemo(
+    () => new Map(aiConfidenceReport.map((item) => [item.field, item] as const)),
+    [aiConfidenceReport],
+  );
+
   function pushToast(message: string, tone: ToastTone = "info") {
     const id = createRowId();
     setToasts((current) => [...current, { id, message, tone }]);
@@ -423,6 +482,103 @@ export function UniversalImportClient({
     toastTimerRef.current = window.setTimeout(() => {
       setToasts((current) => current.filter((item) => item.id !== id));
     }, 2600);
+  }
+
+  function syncRuleMapping(nextMapping: UniversalImportMapping) {
+    setRuleDsl((current) => mergeRuleDslMapping(current, nextMapping));
+  }
+
+  function mergeRuleDslMapping(current: UniversalImportRuleDsl, nextMapping: UniversalImportMapping) {
+    return {
+      ...current,
+      mapping: nextMapping,
+      transforms: current.transforms.map((transform) =>
+        transform.type === "header_mapping"
+          ? {
+              ...transform,
+              config: {
+                ...(transform.config ?? {}),
+                fieldColumns: nextMapping,
+              },
+            }
+          : transform,
+      ),
+    };
+  }
+
+  function handleMappingColumnChange(field: UniversalImportField, value: string) {
+    const columnIndex = value === "" ? null : Number(value);
+    const nextMapping = {
+      ...mapping,
+      [field]: Number.isFinite(columnIndex) ? columnIndex : null,
+    } as UniversalImportMapping;
+
+    setMapping(nextMapping);
+    syncRuleMapping(nextMapping);
+    setRuleStatus("映射列已更新，请确认后保存规则。");
+  }
+
+  function handleTransformConfigDraftChange(transformType: RuleTransformType, value: string) {
+    setTransformConfigDrafts((current) => ({
+      ...current,
+      [transformType]: value,
+    }));
+  }
+
+  function handleTransformConfigCommit(transformType: RuleTransformType) {
+    const transform = ruleDsl.transforms.find((item) => item.type === transformType);
+    const rawValue = transformConfigDrafts[transformType] ?? formatTransformConfig(transform?.config);
+    try {
+      const parsed = JSON.parse(rawValue) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Transform config 必须是 JSON 对象。");
+      }
+
+      setRuleDsl((current) => ({
+        ...current,
+        transforms: current.transforms.map((transform) =>
+          transform.type === transformType
+            ? {
+                ...transform,
+                config: parsed as Record<string, unknown>,
+              }
+            : transform,
+        ),
+      }));
+      setTransformConfigDrafts((current) => ({
+        ...current,
+        [transformType]: JSON.stringify(parsed, null, 2),
+      }));
+      setRuleStatus(`${transformType} 配置已更新，请确认后保存规则。`);
+    } catch (error) {
+      setRuleStatus(error instanceof Error ? error.message : "Transform config JSON 格式不正确，请修正后再保存。");
+    }
+  }
+
+  function buildRuleDslFromEditor() {
+    const nextRuleDsl = mergeRuleDslMapping(ruleDsl, mapping);
+    const transforms = nextRuleDsl.transforms.map((transform) => {
+      const rawValue = transformConfigDrafts[transform.type];
+      if (rawValue === undefined) {
+        return transform;
+      }
+
+      const parsed = JSON.parse(rawValue) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error(`${transform.type} 的 transform config 必须是 JSON 对象。`);
+      }
+
+      return {
+        ...transform,
+        config: parsed as Record<string, unknown>,
+      };
+    });
+
+    return {
+      ...nextRuleDsl,
+      aiConfidenceReport,
+      transforms,
+    };
   }
 
   function registerCellRef(rowId: string, field: UniversalImportField, node: HTMLInputElement | null) {
@@ -562,6 +718,11 @@ export function UniversalImportClient({
     setHeaders([]);
     setFingerprint("");
     setRuleTestSummary("");
+    setAiSummary("");
+    setAiRiskNotes([]);
+    setAiConfidenceReport([]);
+    setAiProviderLabel("");
+    setAiModelLabel("");
     setStatus(
       selectedRuleId
         ? "文件已上传，请点击“试解析选中规则”。"
@@ -573,6 +734,10 @@ export function UniversalImportClient({
     if (!ruleId) {
       setSelectedRuleId("");
       setRuleNameInput("");
+      setAiRiskNotes([]);
+      setAiConfidenceReport([]);
+      setAiProviderLabel("");
+      setAiModelLabel("");
       setTemplateInfo("请先手动选择解析规则，不做自动匹配。");
       setStatus("已清空解析规则选择，试解析和提交前必须重新选择规则。");
       return;
@@ -598,6 +763,12 @@ export function UniversalImportClient({
     setHeaders([]);
     setFingerprint("");
     setRuleTestSummary("");
+    setTransformConfigDrafts({});
+    setAiSummary("");
+    setAiRiskNotes([]);
+    setAiConfidenceReport([]);
+    setAiProviderLabel("");
+    setAiModelLabel("");
     setTemplateInfo("文件类型已变更，请重新手动选择解析规则。");
     setStatus("文件类型已变更，请重新在“选择解析规则”中选择已保存规则。");
   }
@@ -625,6 +796,7 @@ export function UniversalImportClient({
     setFingerprint(nextFingerprint);
     setHeaders(nextHeaders);
     setSelectedIds([]);
+    setTransformConfigDrafts({});
   }
 
   async function handleFileParse(file: File, nextFileType: SupportedImportFileType, nextMapping?: UniversalImportMapping, nextRuleDsl?: UniversalImportRuleDsl) {
@@ -633,10 +805,6 @@ export function UniversalImportClient({
     setFileType(nextFileType);
     setStatus("");
     setAiSummary("");
-    setAiRiskNotes([]);
-    setAiConfidenceReport([]);
-    setAiProviderLabel("");
-    setAiModelLabel("");
     setParseProgress({ active: true, value: 12, label: "正在试解析文件...", processed: 0, total: 100 });
 
     try {
@@ -703,6 +871,7 @@ export function UniversalImportClient({
 
       const normalizedMapping = normalizeMapping(data.suggestedRule.mapping) ?? DEFAULT_MAPPING;
       setRuleDsl(data.suggestedRule);
+      setTransformConfigDrafts({});
       setSelectedRuleId("");
       setDraftRows([]);
       setSelectedIds([]);
@@ -736,6 +905,9 @@ export function UniversalImportClient({
   }
 
   async function saveRule(method: "POST" | "PUT", ruleId?: string) {
+    const editorRuleDsl = buildRuleDslFromEditor();
+    setRuleDsl(editorRuleDsl);
+
     const payload = {
       ruleName: ruleNameInput.trim() || sheetName || "导入规则",
       sheetName,
@@ -743,7 +915,7 @@ export function UniversalImportClient({
       mapping,
       fileType,
       status: "ACTIVE",
-      ruleDsl,
+      ruleDsl: editorRuleDsl,
     };
 
     const endpoint = method === "POST" ? "/api/universal-import/templates" : `/api/universal-import/templates/${ruleId}`;
@@ -768,7 +940,7 @@ export function UniversalImportClient({
 
   async function handleSaveCurrentRule() {
     if (!selectedFile || headers.length === 0) {
-      setRuleStatus("请先上传样例文件并完成试解析后再保存规则。");
+      setRuleStatus("请先上传样例文件，并通过 AI 生成规则或试解析后再保存规则。");
       return;
     }
     try {
@@ -776,6 +948,20 @@ export function UniversalImportClient({
       setRuleStatus(`规则“${template.ruleName}”已保存。`);
     } catch (error) {
       setRuleStatus(error instanceof Error ? error.message : "保存规则失败，请稍后重试。");
+    }
+  }
+
+  async function handleConfirmAiSuggestionSave() {
+    if (!selectedFile || headers.length === 0) {
+      setRuleStatus("请先上传样例文件，并点击 AI 生成规则建议。");
+      return;
+    }
+    try {
+      const template = await saveRule("POST");
+      setRuleStatus(`AI 建议已确认，并保存为规则“${template.ruleName}”。`);
+      setStatus(`AI 建议已确认，并保存为规则“${template.ruleName}”。`);
+    } catch (error) {
+      setRuleStatus(error instanceof Error ? error.message : "确认 AI 建议失败，请稍后重试。");
     }
   }
 
@@ -799,10 +985,19 @@ export function UniversalImportClient({
   function handleApplyRule(rule: RuleRecord) {
     const normalizedMapping = normalizeMapping(rule.mapping) ?? DEFAULT_MAPPING;
     const nextRuleDsl = rule.ruleDsl ?? buildDefaultRuleDsl(normalizedMapping, rule.fileType as SupportedImportFileType);
+    const sampleHeaders = getSampleHeaders(rule.sampleMeta);
+    const savedConfidenceReport = nextRuleDsl.aiConfidenceReport ?? [];
     setSelectedRuleId(rule.id);
     setRuleNameInput(rule.ruleName);
     setMapping(normalizedMapping);
     setRuleDsl(nextRuleDsl);
+    setTransformConfigDrafts({});
+    setAiConfidenceReport(savedConfidenceReport);
+    setAiRiskNotes([]);
+    setAiProviderLabel("");
+    setAiModelLabel("");
+    setHeaders(sampleHeaders);
+    setFileType(rule.fileType as SupportedImportFileType);
     setDraftRows([]);
     setSelectedIds([]);
     setFingerprint("");
@@ -1289,27 +1484,39 @@ export function UniversalImportClient({
 
                     {headers.length > 0 ? (
                       <div className="mapping-grid">
-                        {UNIVERSAL_IMPORT_FIELDS.map((field) => (
-                          <label className="mapping-row" key={field.key}>
-                            <span>{field.label}{field.required ? "*" : ""}</span>
-                            <input
-                              readOnly
-                              value={typeof mapping[field.key] === "number" ? `${headers[mapping[field.key] as number] ?? "未命名列"}` : "未映射"}
-                            />
-                          </label>
-                        ))}
+                        {UNIVERSAL_IMPORT_FIELDS.map((field) => {
+                          const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
+
+                          return (
+                            <label className="mapping-row" key={field.key}>
+                              <span className="mapping-label">
+                                <span>{field.label}{field.required ? "*" : ""}</span>
+                                <em className={`ai-confidence-badge ${aiStatus.tone}`}>{aiStatus.label}</em>
+                              </span>
+                              <input
+                                readOnly
+                                value={typeof mapping[field.key] === "number" ? `${headers[mapping[field.key] as number] ?? "未命名列"}` : "未映射"}
+                              />
+                              <small className="mapping-hint">{aiStatus.detail}</small>
+                            </label>
+                          );
+                        })}
                       </div>
                     ) : null}
 
                     {aiConfidenceReport.length > 0 ? (
                       <div className="overview-grid" style={{ marginTop: 16 }}>
-                        {aiConfidenceReport.map((item) => (
-                          <article className="overview-card" key={item.field}>
-                            <p>{UNIVERSAL_IMPORT_FIELD_LABELS[item.field]}</p>
-                            <strong>{Math.round(item.confidence * 100)}%</strong>
-                            <span>{item.source}</span>
-                          </article>
-                        ))}
+                        {aiConfidenceReport.map((item) => {
+                          const aiStatus = getAiMappingStatus(item);
+
+                          return (
+                            <article className={`overview-card ${aiStatus.tone}`} key={item.field}>
+                              <p>{UNIVERSAL_IMPORT_FIELD_LABELS[item.field]}</p>
+                              <strong>{aiStatus.label}</strong>
+                              <span>{aiStatus.detail}</span>
+                            </article>
+                          );
+                        })}
                       </div>
                     ) : null}
                   </section>
@@ -1696,6 +1903,9 @@ export function UniversalImportClient({
                     </div>
 
                     <div className="toolbar" style={{ marginTop: 16 }}>
+                      <button type="button" className="primary-button" onClick={() => void handleConfirmAiSuggestionSave()} disabled={!selectedFile || headers.length === 0}>
+                        确认 AI 建议并保存为规则
+                      </button>
                       <button type="button" className="primary-button" onClick={() => void handleSaveCurrentRule()}>新建规则</button>
                       <button type="button" className="secondary-button" onClick={() => void handleUpdateSelectedRule()} disabled={!selectedRuleId}>更新选中规则</button>
                       <button type="button" className="secondary-button" onClick={() => void handleTestCurrentRule()} disabled={!selectedFile}>试解析当前规则</button>
@@ -1706,11 +1916,64 @@ export function UniversalImportClient({
                       <p className="footnote">{ruleTestSummary || "这里会显示规则保存、更新、应用和试解析结果。"}</p>
                     </div>
 
-                    <div className="overview-grid" style={{ marginTop: 16 }}>
+                    <div className="rule-editor-section">
+                      <div className="card-heading compact">
+                        <div>
+                          <p className="section-kicker">字段映射</p>
+                          <h3>人工确认 AI 映射列</h3>
+                        </div>
+                      </div>
+                      {headers.length > 0 ? (
+                        <div className="mapping-grid rule-mapping-grid">
+                          {UNIVERSAL_IMPORT_FIELDS.map((field) => {
+                            const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
+                            const currentColumn = mapping[field.key];
+
+                            return (
+                              <label className="mapping-row" key={field.key}>
+                                <span className="mapping-label">
+                                  <span>{field.label}{field.required ? "*" : ""}</span>
+                                  <em className={`ai-confidence-badge ${aiStatus.tone}`}>{aiStatus.label}</em>
+                                </span>
+                                <select
+                                  value={typeof currentColumn === "number" ? String(currentColumn) : ""}
+                                  onChange={(event) => handleMappingColumnChange(field.key, event.target.value)}
+                                >
+                                  <option value="">未映射</option>
+                                  {headers.map((header, index) => (
+                                    <option value={index} key={`${header}-${index}`}>
+                                      {index + 1}. {header || "未命名列"}
+                                    </option>
+                                  ))}
+                                </select>
+                                <small className="mapping-hint">{aiStatus.detail}</small>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="empty-row rule-editor-empty">请先上传样例文件并生成 AI 建议，或应用一条带样例表头的已保存规则。</div>
+                      )}
+                    </div>
+
+                    <div className="rule-editor-section">
+                      <div className="card-heading compact">
+                        <div>
+                          <p className="section-kicker">Transform Config</p>
+                          <h3>规则 DSL JSON / 表单编辑</h3>
+                        </div>
+                      </div>
                       {ruleDsl.transforms.map((transform) => (
-                        <article className="overview-card" key={transform.type}>
-                          <p>{transform.type}</p>
-                          <strong>{transform.enabled ? "启用" : "关闭"}</strong>
+                        <article className="transform-editor-card" key={transform.type}>
+                          <div className="transform-editor-header">
+                            <div>
+                              <p>{transform.type}</p>
+                              <strong>{transform.enabled ? "启用" : "关闭"}</strong>
+                            </div>
+                            <button type="button" className="text-link-button" onClick={() => handleTransformConfigCommit(transform.type)}>
+                              应用 JSON
+                            </button>
+                          </div>
                           <label className="inline-checkbox">
                             <input
                               type="checkbox"
@@ -1727,7 +1990,17 @@ export function UniversalImportClient({
                             />
                             <span>参与试解析</span>
                           </label>
-                          <span>{transform.config ? JSON.stringify(transform.config) : "默认配置"}</span>
+                          <label className="search-field">
+                            <span>config JSON</span>
+                            <textarea
+                              className="json-editor"
+                              value={transformConfigDrafts[transform.type] ?? formatTransformConfig(transform.config)}
+                              onChange={(event) => handleTransformConfigDraftChange(transform.type, event.target.value)}
+                              onBlur={() => handleTransformConfigCommit(transform.type)}
+                              rows={8}
+                              spellCheck={false}
+                            />
+                          </label>
                         </article>
                       ))}
                     </div>
@@ -1774,8 +2047,7 @@ export function UniversalImportClient({
                                     <button type="button" className="text-link-button" onClick={() => handleApplyRule(rule)}>应用</button>
                                     <button type="button" className="text-link-button" onClick={() => void handleCopyRule(rule)}>复制</button>
                                     <button type="button" className="text-link-button" onClick={() => {
-                                      setSelectedRuleId(rule.id);
-                                      setRuleNameInput(rule.ruleName);
+                                      handleApplyRule(rule);
                                     }}>选中</button>
                                     <button type="button" className="text-link-button" onClick={() => void handleDeleteRule(rule.id)}>删除</button>
                                   </div>
