@@ -111,6 +111,27 @@ type TextRecordSplitConfig = {
   item?: TextItemConfig;
 };
 
+type SplitMultilineCellConfig = {
+  headerRowIndex?: number;
+  dataStartRowIndex?: number;
+  dataEndRowIndex?: number;
+  rowFieldColumns?: Partial<Record<UniversalImportField, number>>;
+  matrixStartColumn?: number;
+  matrixEndColumn?: number;
+  columnValueField?: UniversalImportField;
+  itemRegex?: string;
+  itemDelimiterRegex?: string;
+  item?: TextItemConfig;
+  skuCodeGroup?: number | string;
+  skuNameGroup?: number | string;
+  skuSpecGroup?: number | string;
+  skuQuantityGroup?: number | string;
+  skuCodeTemplate?: string;
+  defaultSkuCodePrefix?: string;
+  externalCodeTemplate?: string;
+  excludeHeaderRegex?: string;
+};
+
 function normalizeCell(value: unknown) {
   return String(value ?? "").trim();
 }
@@ -831,6 +852,118 @@ function getCapture(match: RegExpExecArray, group: number | string | undefined, 
   return match[asNumber(group, fallbackGroup)] ?? "";
 }
 
+function getOptionalCapture(match: RegExpExecArray, group: number | string | undefined) {
+  if (typeof group === "string") {
+    return match.groups?.[group] ?? "";
+  }
+
+  return typeof group === "number" ? match[group] ?? "" : "";
+}
+
+function toInterpolationValues(values: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, String(value ?? "")]));
+}
+
+function parseSplitMultilineCells(
+  section: ParsedDocument["sections"][number],
+  config: SplitMultilineCellConfig,
+  rowOffset: number,
+) {
+  const rows = section.rows;
+  const headerRowIndex = asNumber(config.headerRowIndex, 0);
+  const header = rows[headerRowIndex] ?? [];
+  const dataStart = asNumber(config.dataStartRowIndex, headerRowIndex + 1);
+  const dataEnd = asNumber(config.dataEndRowIndex, rows.length);
+  const matrixStart = asNumber(config.matrixStartColumn, 0);
+  const matrixEnd = asNumber(config.matrixEndColumn, header.length - 1);
+  const rowColumns = normalizeFieldColumnMap(config.rowFieldColumns);
+  const excludeRegex = createRegex(config.excludeHeaderRegex, "i");
+  const itemConfig = isRecord(config.item) ? config.item as TextItemConfig : {};
+  const itemRegexPattern =
+    itemConfig.regex ||
+    config.itemRegex ||
+    "([^\\n\\r,，;；|]+?)\\s*(?:x|X|×|\\*)\\s*(\\d+(?:\\.\\d+)?)";
+  const itemRegex = createRegex(itemRegexPattern, "gim");
+  const delimiterRegex = createRegex(config.itemDelimiterRegex, "g");
+  const output: UniversalImportRow[] = [];
+
+  if (!itemRegex) {
+    return output;
+  }
+
+  rows.slice(dataStart, dataEnd).forEach((sourceRow) => {
+    const baseValues: Partial<Record<UniversalImportField, string>> = {};
+    (Object.keys(rowColumns) as UniversalImportField[]).forEach((field) => {
+      const value = getColumnValue(sourceRow, rowColumns[field]);
+      if (value) {
+        baseValues[field] = value;
+      }
+    });
+
+    for (let columnIndex = matrixStart; columnIndex <= matrixEnd; columnIndex += 1) {
+      const columnHeader = normalizeCell(header[columnIndex]);
+      const cellValue = normalizeCell(sourceRow[columnIndex]);
+      if (!cellValue || excludeRegex?.test(columnHeader)) {
+        continue;
+      }
+
+      const cellChunks = delimiterRegex
+        ? cellValue.split(delimiterRegex).filter((chunk) => chunk.trim())
+        : [cellValue];
+
+      cellChunks.forEach((chunk) => {
+        itemRegex.lastIndex = 0;
+        let match: RegExpExecArray | null;
+
+        while ((match = itemRegex.exec(chunk)) !== null) {
+          const skuName = getOptionalCapture(match, itemConfig.skuNameGroup ?? config.skuNameGroup) || match[1] || "";
+          const skuQuantity = getOptionalCapture(match, itemConfig.skuQuantityGroup ?? config.skuQuantityGroup) || match[2] || "";
+          const skuSpec = getOptionalCapture(match, itemConfig.skuSpecGroup ?? config.skuSpecGroup);
+          const context = toInterpolationValues({
+            ...baseValues,
+            sectionTitle: section.title,
+            columnHeader,
+            columnIndex,
+            cellValue,
+            skuName,
+            skuQuantity,
+            skuSpec,
+            itemIndex: output.length + 1,
+          });
+          const skuCode =
+            getOptionalCapture(match, itemConfig.skuCodeGroup ?? config.skuCodeGroup) ||
+            interpolate(config.skuCodeTemplate, context) ||
+            `${asString(config.defaultSkuCodePrefix, "AUTO-SKU")}-${toExternalCodePart(skuName)}`;
+
+          if (!skuName || !isPositiveQuantity(skuQuantity)) {
+            continue;
+          }
+
+          const values: Partial<Record<UniversalImportField, string>> = {
+            ...baseValues,
+            externalCode:
+              baseValues.externalCode ||
+              interpolate(config.externalCodeTemplate, context) ||
+              `CELL-${toExternalCodePart(baseValues.receiverStore || section.title)}-${toExternalCodePart(columnHeader || String(columnIndex))}`,
+            skuCode,
+            skuName,
+            skuSpec,
+            skuQuantity,
+          };
+
+          if (config.columnValueField && isImportField(config.columnValueField) && columnHeader) {
+            values[config.columnValueField] = columnHeader;
+          }
+
+          output.push(rowFromValues(values, rowOffset + output.length + 1));
+        }
+      });
+    }
+  });
+
+  return output;
+}
+
 function parseTextItems(
   text: string,
   itemConfig: TextItemConfig | undefined,
@@ -985,6 +1118,7 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
   const headerTransform = getTransform(rule, "header_mapping");
   const tailTransform = getTransform(rule, "tail_text_extract");
   const matrixTransform = getTransform(rule, "matrix_pivot");
+  const splitCellTransform = getTransform(rule, "split_multiline_cell");
   const cardTransform = getTransform(rule, "card_split");
   const textTransform = getTransform(rule, "text_record_split");
   const useAllSheets = Boolean(getTransform(rule, "multisheet_merge"));
@@ -1019,11 +1153,17 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
       summaries.push(`rule:matrix_pivot:${section.title}`);
     }
 
+    if (splitCellTransform) {
+      rows.push(...parseSplitMultilineCells(section, splitCellTransform.config as SplitMultilineCellConfig, rows.length));
+      summaries.push(`rule:split_multiline_cell:${section.title}`);
+    }
+
     const canEmitHeaderWithMatrix = !matrixTransform || Boolean(effectiveHeaderConfig?.emitWithMatrix);
+    const canEmitHeaderWithSplitCell = !splitCellTransform || Boolean(effectiveHeaderConfig?.emitWithSplitMultilineCell);
     const canEmitHeaderWithCard = !cardTransform || Boolean(effectiveHeaderConfig?.emitWithCard);
     const canEmitHeaderWithText = !textTransform || Boolean(effectiveHeaderConfig?.emitWithText);
 
-    if (hasEffectiveHeader && canEmitHeaderWithMatrix && canEmitHeaderWithCard && canEmitHeaderWithText) {
+    if (hasEffectiveHeader && canEmitHeaderWithMatrix && canEmitHeaderWithSplitCell && canEmitHeaderWithCard && canEmitHeaderWithText) {
       rows.push(...parseRowsByMapping(section, rule, effectiveHeaderConfig, tailValues, rows.length));
       summaries.push(`rule:header_mapping:${section.title}`);
     }
