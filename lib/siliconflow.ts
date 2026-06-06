@@ -19,6 +19,7 @@ type ChatCompletionOptions = {
   messages: SiliconFlowMessage[];
   temperature?: number;
   maxTokens?: number;
+  timeoutMs?: number;
   responseFormat?: SiliconFlowResponseFormat;
 };
 
@@ -61,7 +62,7 @@ export async function createSiliconFlowChatCompletion(options: ChatCompletionOpt
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   try {
     const response = await fetch(`${getBaseUrl()}/chat/completions`, {

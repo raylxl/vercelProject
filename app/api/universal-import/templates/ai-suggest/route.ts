@@ -21,6 +21,8 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+const AI_SUGGEST_TIMEOUT_MS = 40_000;
+
 type AiConfidenceItem = {
   field: UniversalImportField;
   confidence: number;
@@ -294,7 +296,7 @@ function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, 
       sectionCount: document.sections.length,
       sectionPreview,
       structureSummary,
-      textPreview: document.textContent.slice(0, 2600),
+      textPreview: document.textContent.slice(0, 1400),
       targetFields: UNIVERSAL_IMPORT_FIELDS.map((field) => ({
         key: field.key,
         label: field.label,
@@ -357,7 +359,8 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
       },
     ],
     temperature: 0.1,
-    maxTokens: 2200,
+    maxTokens: 1400,
+    timeoutMs: AI_SUGGEST_TIMEOUT_MS,
     responseFormat: {
       type: "json_schema",
       json_schema: {
