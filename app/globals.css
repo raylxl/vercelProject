@@ -825,6 +825,21 @@ code {
   height: 16px;
 }
 
+.inline-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.inline-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
 .search-actions,
 .pagination-summary,
 .pagination-controls,

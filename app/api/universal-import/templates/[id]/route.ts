@@ -27,6 +27,10 @@ function buildSampleMeta(headers: unknown[]) {
   } as Prisma.InputJsonValue;
 }
 
+function createCopiedFingerprint(sourceFingerprint: string) {
+  return `${sourceFingerprint}::copy::${crypto.randomUUID()}`;
+}
+
 type RouteContext = {
   params: Promise<{ id: string }>;
 };
@@ -124,6 +128,55 @@ export async function PUT(request: Request, context: RouteContext) {
   } catch (error) {
     console.error("PUT /api/universal-import/templates/[id] failed", error);
     return NextResponse.json({ error: "更新规则失败，请稍后重试。" }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request, context: RouteContext) {
+  try {
+    const unauthorizedResponse = await ensureAuthenticated();
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
+
+    const { id } = await context.params;
+    const body = (await request.json().catch(() => ({}))) as {
+      ruleName?: string;
+    };
+    const operatorName = await getOperatorNameFromSession();
+    const source = await prisma.universalImportRule.findUnique({
+      where: { id },
+    });
+
+    if (!source) {
+      return NextResponse.json({ error: "规则不存在。" }, { status: 404 });
+    }
+
+    const template = await prisma.universalImportRule.create({
+      data: {
+        fingerprint: createCopiedFingerprint(source.fingerprint),
+        ruleName: body.ruleName?.trim() || `${source.ruleName} 副本`,
+        fileType: source.fileType,
+        version: 1,
+        status: source.status,
+        mapping: source.mapping as Prisma.InputJsonValue,
+        ruleDsl: source.ruleDsl as Prisma.InputJsonValue,
+        sampleMeta: source.sampleMeta as Prisma.InputJsonValue,
+        createdBy: operatorName,
+        updatedBy: operatorName,
+      },
+      include: {
+        _count: {
+          select: {
+            batches: true,
+          },
+        },
+      },
+    });
+
+    return NextResponse.json({ template });
+  } catch (error) {
+    console.error("POST /api/universal-import/templates/[id] failed", error);
+    return NextResponse.json({ error: "复制规则失败，请稍后重试。" }, { status: 500 });
   }
 }
 

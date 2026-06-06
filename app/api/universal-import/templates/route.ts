@@ -27,6 +27,10 @@ function buildSampleMeta(headers: unknown[]) {
   } as Prisma.InputJsonValue;
 }
 
+function createRuleFingerprint(sheetName: string, headers: unknown[]) {
+  return `${buildTemplateFingerprint(sheetName, headers)}::${crypto.randomUUID()}`;
+}
+
 export async function GET(request: Request) {
   try {
     const unauthorizedResponse = await ensureAuthenticated();
@@ -91,7 +95,7 @@ export async function POST(request: Request) {
     };
 
     const headers = body.headers ?? [];
-    const fingerprint = buildTemplateFingerprint(body.sheetName ?? "Sheet1", headers);
+    const fingerprint = createRuleFingerprint(body.sheetName ?? "Sheet1", headers);
     const inferredMapping = inferMappingFromHeaders(headers);
     const operatorName = await getOperatorNameFromSession();
     const fileType = (body.fileType?.trim() || "excel") as SupportedImportFileType;
@@ -99,9 +103,8 @@ export async function POST(request: Request) {
     const ruleDsl = body.ruleDsl ?? (createDefaultRuleDsl(mapping, fileType) as Prisma.InputJsonValue);
     const sampleMeta = buildSampleMeta(headers);
 
-    const template = await prisma.universalImportRule.upsert({
-      where: { fingerprint },
-      create: {
+    const template = await prisma.universalImportRule.create({
+      data: {
         fingerprint,
         ruleName: body.ruleName?.trim() || body.sheetName?.trim() || "导入规则",
         fileType,
@@ -110,15 +113,6 @@ export async function POST(request: Request) {
         ruleDsl,
         sampleMeta,
         createdBy: operatorName,
-        updatedBy: operatorName,
-      },
-      update: {
-        ruleName: body.ruleName?.trim() || body.sheetName?.trim() || "导入规则",
-        fileType,
-        status: body.status?.trim() || "ACTIVE",
-        mapping,
-        ruleDsl,
-        sampleMeta,
         updatedBy: operatorName,
       },
       include: {

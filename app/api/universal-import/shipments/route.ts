@@ -172,6 +172,7 @@ export async function POST(request: Request) {
       rows?: UniversalImportRow[];
       mapping?: Record<string, number | null>;
       fingerprint?: string;
+      ruleId?: string;
     };
 
     const rows = body.rows ?? [];
@@ -276,17 +277,27 @@ export async function POST(request: Request) {
       });
     });
 
-    const rule = body.fingerprint?.trim()
+    const rule = body.ruleId?.trim()
       ? await prisma.universalImportRule.findUnique({
           where: {
-            fingerprint: body.fingerprint.trim(),
+            id: body.ruleId.trim(),
           },
           select: {
             id: true,
             version: true,
           },
         })
-      : null;
+      : body.fingerprint?.trim()
+        ? await prisma.universalImportRule.findUnique({
+            where: {
+              fingerprint: body.fingerprint.trim(),
+            },
+            select: {
+              id: true,
+              version: true,
+            },
+          })
+        : null;
 
     const result = await prisma.$transaction(async (tx) => {
       const batch = await tx.universalImportBatch.create({

@@ -56,7 +56,7 @@ export type RuleExecutionResult = {
   summary: string[];
 };
 
-type DetectedScenario =
+type RuleScenario =
   | "haikou_delivery"
   | "hunan_summary"
   | "multi_sheet_store"
@@ -200,7 +200,7 @@ function cleanStoreName(value: string) {
 }
 
 function isPositiveQuantity(value: string) {
-  return /^\d+$/.test(value.trim()) && Number(value) > 0;
+  return /^\d+(?:\.\d+)?$/.test(value.trim()) && Number(value) > 0;
 }
 
 function toCompactCodePart(value: string) {
@@ -334,61 +334,6 @@ export async function parseImportDocument(options: {
   }
 
   return parseExcelDocument(options.fileBuffer, options.originalFileName);
-}
-
-function detectScenario(document: ParsedDocument): DetectedScenario {
-  const fullText = document.textContent;
-  const firstSection = document.sections[0];
-  const firstRow = firstSection?.rows[0]?.join(" ") ?? "";
-  const secondRow = firstSection?.rows[1]?.join(" ") ?? "";
-  const sheetCount = document.sections.length;
-
-  if (document.fileType === "pdf") {
-    return "pdf_delivery";
-  }
-
-  if (document.fileType === "word") {
-    return "generic_text";
-  }
-
-  if (
-    sheetCount > 1 &&
-    document.sections.every((section) =>
-      section.rows.some((row) => row.includes("物品编码") && row.includes("物品名称") && row.includes("出库数量")),
-    )
-  ) {
-    return "multi_sheet_store";
-  }
-
-  if (/门店调拨单/.test(firstRow) || fullText.includes("调拨记录 #")) {
-    return "card_transfer";
-  }
-
-  if (
-    firstSection?.rows.some(
-      (row) => row.includes("仓库名称") && row.includes("SKU名称") && row.includes("外部商品编码"),
-    )
-  ) {
-    return "store_matrix";
-  }
-
-  if (firstSection?.rows.some((row) => row.includes("配送汇总单号*") && row.includes("收货机构"))) {
-    return "hunan_summary";
-  }
-
-  if (/配送发货单/.test(firstRow) && /收货机构/.test(secondRow)) {
-    return "haikou_delivery";
-  }
-
-  if (
-    document.sections.some((section) =>
-      section.rows.some((row) => row.includes("物品编码") || row.includes("外部商品编码") || row.includes("SKU条码")),
-    )
-  ) {
-    return "generic_table";
-  }
-
-  return "generic_text";
 }
 
 function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): UniversalImportRow {
@@ -810,7 +755,7 @@ function parseGenericText(document: ParsedDocument) {
     );
 }
 
-function executeScenarioParser(document: ParsedDocument, scenario: DetectedScenario) {
+function executeScenarioParser(document: ParsedDocument, scenario: RuleScenario) {
   if (scenario === "haikou_delivery") {
     return {
       rows: parseHaikouDelivery(document),
@@ -866,6 +811,74 @@ function executeScenarioParser(document: ParsedDocument, scenario: DetectedScena
   };
 }
 
+function isTransformEnabled(rule: UniversalImportRuleDsl, type: RuleTransformType) {
+  return rule.transforms.some((transform) => transform.type === type && transform.enabled);
+}
+
+function executeRuleDrivenParser(document: ParsedDocument, rule: UniversalImportRuleDsl) {
+  const candidates: Array<{
+    scenario: RuleScenario;
+    enabled: boolean;
+  }> = [
+    {
+      scenario: "multi_sheet_store",
+      enabled: document.fileType === "excel" && document.sections.length > 1 && isTransformEnabled(rule, "multisheet_merge"),
+    },
+    {
+      scenario: "card_transfer",
+      enabled: document.fileType === "excel" && isTransformEnabled(rule, "card_split"),
+    },
+    {
+      scenario: "store_matrix",
+      enabled: document.fileType === "excel" && isTransformEnabled(rule, "matrix_pivot"),
+    },
+    {
+      scenario: "pdf_delivery",
+      enabled: document.fileType === "pdf" && isTransformEnabled(rule, "tail_text_extract"),
+    },
+    {
+      scenario: "generic_text",
+      enabled: document.fileType === "word" && isTransformEnabled(rule, "text_record_split"),
+    },
+    {
+      scenario: "haikou_delivery",
+      enabled: document.fileType === "excel" && isTransformEnabled(rule, "tail_text_extract"),
+    },
+    {
+      scenario: "hunan_summary",
+      enabled: document.fileType === "excel" && isTransformEnabled(rule, "group_by_external_code"),
+    },
+    {
+      scenario: "generic_table",
+      enabled: document.fileType === "excel" && isTransformEnabled(rule, "header_mapping"),
+    },
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate.enabled) {
+      continue;
+    }
+
+    const result = executeScenarioParser(document, candidate.scenario);
+    if (result.rows.length > 0) {
+      return {
+        ...result,
+        summary: [`rule-transform:${candidate.scenario}`, ...result.summary],
+      };
+    }
+  }
+
+  return document.fileType === "excel"
+    ? {
+        ...executeScenarioParser(document, "generic_table"),
+        summary: ["rule-transform:generic_table"],
+      }
+    : {
+        ...executeScenarioParser(document, "generic_text"),
+        summary: ["rule-transform:generic_text"],
+      };
+}
+
 export function createDefaultRuleDsl(mapping: UniversalImportMapping, fileType: SupportedImportFileType): UniversalImportRuleDsl {
   return {
     fileType,
@@ -895,8 +908,7 @@ export async function executeUniversalImportRule(options: {
     originalFileName: options.originalFileName,
   });
 
-  const scenario = detectScenario(document);
-  const { rows, summary } = executeScenarioParser(document, scenario);
+  const { rows, summary } = executeRuleDrivenParser(document, options.rule);
   const validation = validateImportRows(rows);
 
   return {
@@ -905,6 +917,6 @@ export async function executeUniversalImportRule(options: {
     issues: validation.issues.map(formatIssueLabel),
     issueCount: validation.issues.length,
     rowCount: rows.length,
-    summary: [`scenario:${scenario}`, ...summary],
+    summary,
   } satisfies RuleExecutionResult;
 }

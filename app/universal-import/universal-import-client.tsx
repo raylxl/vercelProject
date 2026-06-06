@@ -767,6 +767,31 @@ export function UniversalImportClient({
     }
   }
 
+  async function handleCopyRule(rule: RuleRecord) {
+    try {
+      const response = await fetch(`/api/universal-import/templates/${rule.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ruleName: `${rule.ruleName} 副本`,
+        }),
+      });
+      const data = (await response.json()) as RuleUpsertResponse;
+      if (!response.ok || !data.template) {
+        throw new Error(data.error ?? "复制规则失败，请稍后重试。");
+      }
+
+      setSelectedRuleId(data.template.id);
+      setRuleNameInput(data.template.ruleName);
+      setRuleStatus(`规则“${data.template.ruleName}”已复制，可继续调整后保存。`);
+      await loadRules();
+    } catch (error) {
+      setRuleStatus(error instanceof Error ? error.message : "复制规则失败，请稍后重试。");
+    }
+  }
+
   async function handleTestCurrentRule() {
     if (!selectedFile) {
       setRuleTestSummary("请先上传样例文件。");
@@ -845,6 +870,7 @@ export function UniversalImportClient({
           headers,
           mapping,
           fingerprint,
+          ruleId: selectedRuleId,
           rows: draftRows,
         }),
       });
@@ -1601,6 +1627,22 @@ export function UniversalImportClient({
                         <article className="overview-card" key={transform.type}>
                           <p>{transform.type}</p>
                           <strong>{transform.enabled ? "启用" : "关闭"}</strong>
+                          <label className="inline-checkbox">
+                            <input
+                              type="checkbox"
+                              checked={transform.enabled}
+                              onChange={(event) => {
+                                const enabled = event.target.checked;
+                                setRuleDsl((current) => ({
+                                  ...current,
+                                  transforms: current.transforms.map((item) =>
+                                    item.type === transform.type ? { ...item, enabled } : item,
+                                  ),
+                                }));
+                              }}
+                            />
+                            <span>参与试解析</span>
+                          </label>
                           <span>{transform.config ? JSON.stringify(transform.config) : "默认配置"}</span>
                         </article>
                       ))}
@@ -1646,6 +1688,7 @@ export function UniversalImportClient({
                                 <td>
                                   <div className="toolbar">
                                     <button type="button" className="text-link-button" onClick={() => handleApplyRule(rule)}>应用</button>
+                                    <button type="button" className="text-link-button" onClick={() => void handleCopyRule(rule)}>复制</button>
                                     <button type="button" className="text-link-button" onClick={() => {
                                       setSelectedRuleId(rule.id);
                                       setRuleNameInput(rule.ruleName);
