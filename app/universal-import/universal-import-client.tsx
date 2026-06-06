@@ -1067,6 +1067,22 @@ export function UniversalImportClient({
     await handleFileParse(selectedFile, fileType, mapping, ruleDsl);
   }
 
+  async function handleTestDraftRule() {
+    if (!selectedFile) {
+      setStatus("请先上传样例文件。");
+      return;
+    }
+
+    try {
+      const editorRuleDsl = buildRuleDslFromEditor();
+      setRuleDsl(editorRuleDsl);
+      setStatus("正在使用当前 AI 建议和人工调整后的映射试解析。");
+      await handleFileParse(selectedFile, fileType, mapping, editorRuleDsl);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和 Transform Config。");
+    }
+  }
+
   function handleCellChange(rowId: string, field: UniversalImportField, value: string) {
     setDraftRows((current) => current.map((row) => (row.id === rowId ? { ...row, [field]: value } : row)));
   }
@@ -1501,6 +1517,7 @@ export function UniversalImportClient({
                       <div className="mapping-grid">
                         {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                           const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
+                          const currentColumn = mapping[field.key];
 
                           return (
                             <label className="mapping-row" key={field.key}>
@@ -1508,14 +1525,35 @@ export function UniversalImportClient({
                                 <span>{field.label}{field.required ? "*" : ""}</span>
                                 <em className={`ai-confidence-badge ${aiStatus.tone}`}>{aiStatus.label}</em>
                               </span>
-                              <input
-                                readOnly
-                                value={typeof mapping[field.key] === "number" ? `${headers[mapping[field.key] as number] ?? "未命名列"}` : "未映射"}
-                              />
+                              <select
+                                value={typeof currentColumn === "number" ? String(currentColumn) : ""}
+                                onChange={(event) => handleMappingColumnChange(field.key, event.target.value)}
+                              >
+                                <option value="">未映射</option>
+                                {headers.map((header, index) => (
+                                  <option value={index} key={`${header}-${index}`}>
+                                    {index + 1}. {header || "未命名列"}
+                                  </option>
+                                ))}
+                              </select>
                               <small className="mapping-hint">{aiStatus.detail}</small>
                             </label>
                           );
                         })}
+                        <div className="mapping-action-row">
+                          <div>
+                            <strong>下一步</strong>
+                            <span>先把必填字段映射到正确列，再试解析；结果确认无误后保存为规则。</span>
+                          </div>
+                          <div className="toolbar">
+                            <button type="button" className="secondary-button" onClick={() => void handleTestDraftRule()} disabled={!selectedFile}>
+                              试解析当前 AI 建议
+                            </button>
+                            <button type="button" className="primary-button" onClick={() => void handleConfirmAiSuggestionSave()} disabled={!selectedFile || headers.length === 0}>
+                              确认 AI 建议并保存为规则
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ) : null}
 

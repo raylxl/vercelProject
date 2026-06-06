@@ -1359,6 +1359,30 @@ code {
   margin-bottom: 0;
 }
 
+.mapping-action-row {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid rgba(20, 196, 207, 0.22);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(230, 249, 251, 0.85), rgba(255, 255, 255, 0.96));
+}
+
+.mapping-action-row strong,
+.mapping-action-row span {
+  display: block;
+}
+
+.mapping-action-row span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .rule-editor-empty {
   border: 1px dashed rgba(20, 196, 207, 0.28);
   border-radius: 12px;
