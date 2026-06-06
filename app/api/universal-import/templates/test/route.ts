@@ -10,11 +10,20 @@ import {
   type SupportedImportFileType,
   type UniversalImportRuleDsl,
 } from "@/lib/universal-import-engine";
+import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
 import { NextResponse } from "next/server";
 
 async function ensureExamModeAccess() {
   // 考试模式不包含登录模块，试解析 API 直接开放给演示用户使用。
   return null;
+}
+
+function parseJsonField<T>(rawValue: string, fieldName: string) {
+  try {
+    return JSON.parse(rawValue) as T;
+  } catch {
+    throw new Error(`${fieldName} 不是合法 JSON，请检查规则编辑器中的配置。`);
+  }
 }
 
 export async function POST(request: Request) {
@@ -44,10 +53,10 @@ export async function POST(request: Request) {
 
     const inferredMapping = inferMappingFromHeaders(document.headers);
     const mapping = mappingRaw
-      ? (JSON.parse(mappingRaw) as UniversalImportMapping)
+      ? parseJsonField<UniversalImportMapping>(mappingRaw, "字段映射")
       : inferredMapping;
     const ruleDsl = ruleDslRaw
-      ? (JSON.parse(ruleDslRaw) as UniversalImportRuleDsl)
+      ? parseJsonField<UniversalImportRuleDsl>(ruleDslRaw, "解析规则 DSL")
       : createDefaultRuleDsl(mapping, fileType);
 
     const result = await executeUniversalImportRule({
@@ -63,7 +72,15 @@ export async function POST(request: Request) {
       inferredMapping,
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "试解析失败，请稍后重试。";
     console.error("POST /api/universal-import/templates/test failed", error);
-    return NextResponse.json({ error: "试解析失败，请稍后重试。" }, { status: 500 });
+    await sendDingTalkAlert({
+      title: "万能导入 V2 试解析失败",
+      message,
+      tags: {
+        module: "rule-test",
+      },
+    });
+    return NextResponse.json({ error: message }, { status: message.includes("JSON") ? 400 : 500 });
   }
 }

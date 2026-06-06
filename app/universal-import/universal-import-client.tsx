@@ -2,7 +2,7 @@
 
 import * as XLSX from "xlsx";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   UNIVERSAL_IMPORT_FIELDS,
   UNIVERSAL_IMPORT_FIELD_LABELS,
@@ -179,6 +179,10 @@ const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
   page: 1,
   pageSize: 10,
 };
+
+const PREVIEW_INITIAL_RENDER_COUNT = 160;
+const PREVIEW_RENDER_BATCH_SIZE = 160;
+const MAX_VISIBLE_ISSUES = 200;
 
 const TOP_NAV_ITEMS = ["智能多格式批量下单系统"] as const;
 
@@ -395,6 +399,7 @@ export function UniversalImportClient({
   const [existingCodeRows, setExistingCodeRows] = useState<ExistingExternalCodeEntry[]>([]);
   const [activeTab, setActiveTab] = useState<"import" | "history" | "rules">(initialTab);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [previewRenderLimit, setPreviewRenderLimit] = useState(PREVIEW_INITIAL_RENDER_COUNT);
   const [ruleList, setRuleList] = useState<RuleRecord[]>([]);
   const [ruleLoading, setRuleLoading] = useState(false);
   const [ruleStatus, setRuleStatus] = useState("");
@@ -412,6 +417,7 @@ export function UniversalImportClient({
     "智能多格式批量下单系统",
   ]);
   const [activeMenuPath, setActiveMenuPath] = useState("智能多格式批量下单系统/万能导入V2");
+  const deferredDraftRows = useDeferredValue(draftRows);
 
   const existingExternalCodes = useMemo(
     () =>
@@ -424,8 +430,8 @@ export function UniversalImportClient({
   );
 
   const validation = useMemo(
-    () => validateImportRows(draftRows, existingExternalCodes),
-    [draftRows, existingExternalCodes],
+    () => validateImportRows(deferredDraftRows, existingExternalCodes),
+    [deferredDraftRows, existingExternalCodes],
   );
 
   const errorRowCount = useMemo(
@@ -436,7 +442,7 @@ export function UniversalImportClient({
   const rowErrorsById = useMemo(() => {
     const map = new Map<string, UniversalImportIssue[]>();
     validation.issues.forEach((issue) => {
-      const row = draftRows[issue.rowIndex - 1];
+      const row = deferredDraftRows[issue.rowIndex - 1];
       if (!row) {
         return;
       }
@@ -445,12 +451,17 @@ export function UniversalImportClient({
       map.set(row.id, current);
     });
     return map;
-  }, [draftRows, validation.issues]);
+  }, [deferredDraftRows, validation.issues]);
 
   const rowErrorSummary = useMemo(
     () => validation.issues.map((issue) => formatIssueLabel(issue)),
     [validation.issues],
   );
+  const visibleIssueSummary = useMemo(
+    () => rowErrorSummary.slice(0, MAX_VISIBLE_ISSUES),
+    [rowErrorSummary],
+  );
+  const hiddenIssueCount = Math.max(rowErrorSummary.length - visibleIssueSummary.length, 0);
 
   const historyShipmentCount = historyData.total ?? 0;
   const historyItemCount = useMemo(
@@ -466,6 +477,11 @@ export function UniversalImportClient({
   const allRowsSelected = draftRows.length > 0 && selectedIds.length === draftRows.length;
   const selectedCount = selectedIds.length;
   const totalCount = draftRows.length;
+  const visibleDraftRows = useMemo(
+    () => draftRows.slice(0, previewRenderLimit),
+    [draftRows, previewRenderLimit],
+  );
+  const hiddenPreviewRowCount = Math.max(draftRows.length - visibleDraftRows.length, 0);
   const groupedPreviewCount = useMemo(() => new Set(draftRows.map((row) => row.externalCode.trim())).size, [draftRows]);
   const aiConfidenceByField = useMemo(
     () => new Map(aiConfidenceReport.map((item) => [item.field, item] as const)),
@@ -713,6 +729,7 @@ export function UniversalImportClient({
     setFileName(file.name);
     setFileType(nextFileType);
     setDraftRows([]);
+    setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
     setSelectedIds([]);
     setHeaders([]);
     setFingerprint("");
@@ -747,6 +764,7 @@ export function UniversalImportClient({
       handleApplyRule(rule);
       setFileType(rule.fileType as SupportedImportFileType);
       setDraftRows([]);
+      setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
       setSelectedIds([]);
       setFingerprint("");
       setRuleTestSummary("");
@@ -758,6 +776,7 @@ export function UniversalImportClient({
     setSelectedRuleId("");
     setRuleNameInput("");
     setDraftRows([]);
+    setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
     setSelectedIds([]);
     setHeaders([]);
     setFingerprint("");
@@ -774,6 +793,7 @@ export function UniversalImportClient({
 
   function applyRuleToState(rows: UniversalImportRow[], nextMapping: UniversalImportMapping, nextRuleDsl: UniversalImportRuleDsl, nextSheetName: string, nextFingerprint: string, nextHeaders: string[]) {
     setDraftRows(toDraftRows(rows));
+    setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
     setMapping(nextMapping);
     setRuleDsl(nextRuleDsl);
     setSheetName(nextSheetName);
@@ -1052,7 +1072,11 @@ export function UniversalImportClient({
   }
 
   function addEmptyRow() {
-    setDraftRows((current) => [...current, createEmptyDraftRow(current.length + 1)]);
+    const nextLength = draftRows.length + 1;
+    setDraftRows((current) => {
+      return [...current, createEmptyDraftRow(current.length + 1)];
+    });
+    setPreviewRenderLimit((currentLimit) => Math.max(currentLimit, Math.min(nextLength, currentLimit + 1)));
     setStatus("已新增空行。");
   }
 
@@ -1060,13 +1084,26 @@ export function UniversalImportClient({
     if (ids.length === 0) {
       return;
     }
+    const idSet = new Set(ids);
+    const nextLength = draftRows.filter((row) => !idSet.has(row.id)).length;
     setDraftRows((current) =>
       current
-        .filter((row) => !ids.includes(row.id))
+        .filter((row) => !idSet.has(row.id))
         .map((row, index) => ({ ...row, rowIndex: index + 1 })),
     );
-    setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
+    setPreviewRenderLimit((currentLimit) =>
+      Math.max(PREVIEW_INITIAL_RENDER_COUNT, Math.min(currentLimit, nextLength)),
+    );
+    setSelectedIds((current) => current.filter((id) => !idSet.has(id)));
     setStatus("已删除所选行。");
+  }
+
+  function showMorePreviewRows() {
+    setPreviewRenderLimit((current) => Math.min(current + PREVIEW_RENDER_BATCH_SIZE, draftRows.length));
+  }
+
+  function showAllPreviewRows() {
+    setPreviewRenderLimit(draftRows.length);
   }
 
   function exportPreview() {
@@ -1088,8 +1125,9 @@ export function UniversalImportClient({
       setStatus("请先导入并试解析文件。");
       return;
     }
-    if (hasBlockingErrors) {
-      setStatus("存在未修正的错误行，请先处理后再提交。");
+    const immediateValidation = validateImportRows(draftRows, existingExternalCodes);
+    if (immediateValidation.issues.length > 0) {
+      setStatus(`存在 ${immediateValidation.issues.length} 个未修正问题，请先处理后再提交。`);
       return;
     }
     setSubmitting(true);
@@ -1394,7 +1432,7 @@ export function UniversalImportClient({
                       </label>
                       <label className="search-field">
                         <span>规则名称</span>
-                        <input value={ruleNameInput} onChange={(event) => setRuleNameInput(event.target.value)} placeholder="例如：湖南仓发货明细规则" />
+                        <input value={ruleNameInput} onChange={(event) => setRuleNameInput(event.target.value)} placeholder="例如：门店矩阵配送规则" />
                       </label>
                     </div>
 
@@ -1506,6 +1544,7 @@ export function UniversalImportClient({
                       </div>
                       <div className="pagination-summary">
                         <span>共 {draftRows.length} 行</span>
+                        {hiddenPreviewRowCount > 0 ? <span>已渲染 {visibleDraftRows.length} 行</span> : null}
                         <span>已选 {selectedCount} 行</span>
                       </div>
                     </div>
@@ -1539,7 +1578,7 @@ export function UniversalImportClient({
                               </td>
                             </tr>
                           ) : (
-                            draftRows.map((row, index) => {
+                            visibleDraftRows.map((row, index) => {
                               const rowIssues = rowErrorsById.get(row.id) ?? [];
                               return (
                                 <tr key={row.id} className={rowIssues.length > 0 ? "has-error" : ""}>
@@ -1556,7 +1595,7 @@ export function UniversalImportClient({
                                       }}
                                     />
                                   </td>
-                                  <td>{index + 1}</td>
+                                  <td>{row.rowIndex || index + 1}</td>
                                   {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                                     const issue = rowIssues.find((item) => item.field === field.key);
                                     return (
@@ -1585,6 +1624,46 @@ export function UniversalImportClient({
                         </tbody>
                       </table>
                     </div>
+
+                    {hiddenPreviewRowCount > 0 ? (
+                      <div className="preview-render-toolbar">
+                        <span>
+                          为保证 1000+ 行数据渲染流畅，当前先展示前 {visibleDraftRows.length} 行，剩余 {hiddenPreviewRowCount} 行仍会参与校验、导出和提交。
+                        </span>
+                        <div className="toolbar">
+                          <button type="button" className="secondary-button" onClick={showMorePreviewRows}>
+                            继续加载 {Math.min(PREVIEW_RENDER_BATCH_SIZE, hiddenPreviewRowCount)} 行
+                          </button>
+                          <button type="button" className="tool-button" onClick={showAllPreviewRows}>
+                            显示全部
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {hasBlockingErrors ? (
+                      <div className="validation-summary-card">
+                        <div className="card-heading compact">
+                          <div>
+                            <p className="section-kicker">校验错误</p>
+                            <h3>全部错误一次性展示</h3>
+                          </div>
+                          <span className="error-count-badge">{rowErrorSummary.length} 个问题</span>
+                        </div>
+                        <div className="validation-summary-list">
+                          {visibleIssueSummary.map((item) => (
+                            <div className="validation-summary-item" key={item}>
+                              {item}
+                            </div>
+                          ))}
+                          {hiddenIssueCount > 0 ? (
+                            <div className="validation-summary-item muted">
+                              还有 {hiddenIssueCount} 个问题未展开，请先处理上方错误或导出后筛查。
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
                   </section>
                 </section>
 
@@ -1867,7 +1946,7 @@ export function UniversalImportClient({
                     <div className="history-filters">
                       <label className="search-field">
                         <span>规则名称</span>
-                        <input value={ruleNameInput} onChange={(event) => setRuleNameInput(event.target.value)} placeholder="例如：湖南仓发货明细规则" />
+                        <input value={ruleNameInput} onChange={(event) => setRuleNameInput(event.target.value)} placeholder="例如：门店矩阵配送规则" />
                       </label>
                       <label className="search-field">
                         <span>当前文件类型</span>

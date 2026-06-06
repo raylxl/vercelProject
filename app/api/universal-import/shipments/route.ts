@@ -3,6 +3,7 @@ import {
   type UniversalImportRow,
   validateImportRows,
 } from "@/lib/universal-import";
+import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
 import { getOperatorNameFromSession } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
@@ -211,6 +212,16 @@ export async function POST(request: Request) {
     const { issues } = validateImportRows(rows, existingExternalCodes);
 
     if (issues.length > 0) {
+      await sendDingTalkAlert({
+        title: "万能导入 V2 提交校验失败",
+        message: `本次提交存在 ${issues.length} 个未修正问题，系统已阻止入库。`,
+        tags: {
+          module: "shipment-submit",
+          fileName: body.originalFileName,
+          rowCount: rows.length,
+          firstIssue: issues[0] ? formatIssueLabel(issues[0]) : "",
+        },
+      });
       return NextResponse.json(
         {
           error: "存在未修正的错误行，无法提交。",
@@ -221,7 +232,7 @@ export async function POST(request: Request) {
     }
 
     const operatorName = await getOperatorNameFromSession();
-    const batchName = body.batchName?.trim() || body.originalFileName?.trim() || "万能导入批次";
+    const batchName = body.batchName?.trim() || body.originalFileName?.trim() || "智能多格式批量下单批次";
 
     const shipmentMap = new Map<
       string,
@@ -362,6 +373,13 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("POST /api/universal-import/shipments failed", error);
+    await sendDingTalkAlert({
+      title: "万能导入 V2 提交异常",
+      message: error instanceof Error ? error.message : "提交失败，请稍后重试。",
+      tags: {
+        module: "shipment-submit",
+      },
+    });
     return NextResponse.json({ error: "提交失败，请稍后重试。" }, { status: 500 });
   }
 }

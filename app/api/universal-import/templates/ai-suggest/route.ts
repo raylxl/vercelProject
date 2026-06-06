@@ -16,6 +16,7 @@ import {
   getConfiguredLlmProvider,
   isLlmConfigured,
 } from "@/lib/siliconflow";
+import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -507,10 +508,28 @@ export async function POST(request: Request) {
       });
     } catch (llmError) {
       console.error("LLM ai-suggest failed, fallback to heuristic", llmError);
+      await sendDingTalkAlert({
+        title: "万能导入 V2 AI 规则生成降级",
+        message: llmError instanceof Error ? llmError.message : "LLM 调用失败，已降级为本地兜底规则。",
+        tags: {
+          module: "ai-suggest",
+          provider: getConfiguredLlmProvider(),
+          model: getConfiguredLlmModel(),
+          fileType,
+          fileName: file.name,
+        },
+      });
       return NextResponse.json(createFallbackSuggestion(fileType, inferredMapping, document));
     }
   } catch (error) {
     console.error("POST /api/universal-import/templates/ai-suggest failed", error);
+    await sendDingTalkAlert({
+      title: "万能导入 V2 AI 规则生成失败",
+      message: error instanceof Error ? error.message : "AI 规则建议生成失败，请稍后重试。",
+      tags: {
+        module: "ai-suggest",
+      },
+    });
     return NextResponse.json({ error: "AI 规则建议生成失败，请稍后重试。" }, { status: 500 });
   }
 }
