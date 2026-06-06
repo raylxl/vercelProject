@@ -121,6 +121,11 @@ type ColumnOption = {
   samples: string[];
 };
 
+type TailSourceOption = {
+  value: string;
+  labels: string[];
+};
+
 type AiSuggestResponse = {
   documentSummary?: {
     fileType: SupportedImportFileType;
@@ -169,6 +174,28 @@ type ProgressState = {
   total: number;
 };
 
+type ParseFailureState = {
+  message: string;
+  fileName: string;
+  fileType: SupportedImportFileType;
+  ruleName: string;
+};
+
+type PerformanceSnapshot = {
+  parseMs: number;
+  totalRows: number;
+  renderedRows: number;
+  issueCount: number;
+  renderMode: "full" | "batched";
+};
+
+type SubmitSummary = {
+  successCount: number;
+  failCount: number;
+  shipmentCount: number;
+  submittedAt: string;
+};
+
 type ToastItem = {
   id: string;
   message: string;
@@ -191,6 +218,7 @@ const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
 const PREVIEW_INITIAL_RENDER_COUNT = 160;
 const PREVIEW_RENDER_BATCH_SIZE = 160;
 const MAX_VISIBLE_ISSUES = 200;
+const TAIL_SOURCE_PREFIX = "__tail__:";
 
 const TOP_NAV_ITEMS = ["智能多格式批量下单系统"] as const;
 
@@ -380,6 +408,131 @@ function formatTransformConfig(config: Record<string, unknown> | undefined) {
   return JSON.stringify(config ?? {}, null, 2);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function getTailTransform(rule: UniversalImportRuleDsl) {
+  return rule.transforms.find((transform) => transform.type === "tail_text_extract");
+}
+
+function normalizeTailLabels(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+}
+
+function encodeTailSourceValue(labels: string[]) {
+  return `${TAIL_SOURCE_PREFIX}${encodeURIComponent(JSON.stringify(labels))}`;
+}
+
+function decodeTailSourceValue(value: string) {
+  if (!value.startsWith(TAIL_SOURCE_PREFIX)) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(value.slice(TAIL_SOURCE_PREFIX.length))) as unknown;
+    return normalizeTailLabels(parsed);
+  } catch {
+    return [];
+  }
+}
+
+function getTailSourceOption(rule: UniversalImportRuleDsl, field: UniversalImportField): TailSourceOption | null {
+  const tailTransform = getTailTransform(rule);
+  if (!tailTransform || !isRecord(tailTransform.config)) {
+    return null;
+  }
+
+  const labelsConfig = tailTransform.config.keyValueLabels;
+  if (!isRecord(labelsConfig)) {
+    return null;
+  }
+
+  const labels = normalizeTailLabels(labelsConfig[field]);
+  if (labels.length === 0) {
+    return null;
+  }
+
+  return {
+    value: encodeTailSourceValue(labels),
+    labels,
+  };
+}
+
+function getTailSourceOptionLabel(option: TailSourceOption) {
+  return `尾部信息提取：${option.labels.join(" / ")}`;
+}
+
+function getMappingSelectValue(
+  rule: UniversalImportRuleDsl,
+  field: UniversalImportField,
+  currentColumn: number | null,
+) {
+  if (typeof currentColumn === "number") {
+    return String(currentColumn);
+  }
+
+  return getTailSourceOption(rule, field)?.value ?? "";
+}
+
+function updateTailSourceField(
+  rule: UniversalImportRuleDsl,
+  field: UniversalImportField,
+  nextLabels: string[],
+) {
+  const normalizedLabels = normalizeTailLabels(nextLabels);
+  let transformMatched = false;
+
+  const nextTransforms = rule.transforms.map((transform) => {
+    if (transform.type !== "tail_text_extract") {
+      return transform;
+    }
+
+    transformMatched = true;
+    const currentConfig = isRecord(transform.config) ? transform.config : {};
+    const rawLabelMap = isRecord(currentConfig.keyValueLabels) ? currentConfig.keyValueLabels : {};
+    const nextLabelMap = { ...rawLabelMap } as Record<string, unknown>;
+
+    if (normalizedLabels.length > 0) {
+      nextLabelMap[field] = normalizedLabels;
+    } else {
+      delete nextLabelMap[field];
+    }
+
+    return {
+      ...transform,
+      enabled: normalizedLabels.length > 0 ? true : transform.enabled,
+      config: {
+        ...currentConfig,
+        keyValueLabels: nextLabelMap,
+      },
+    };
+  });
+
+  if (!transformMatched && normalizedLabels.length > 0) {
+    nextTransforms.push({
+      type: "tail_text_extract",
+      enabled: true,
+      config: {
+        keyValueLabels: {
+          [field]: normalizedLabels,
+        },
+      },
+    });
+  }
+
+  return {
+    ...rule,
+    transforms: nextTransforms,
+  };
+}
+
 function getAiMappingStatus(item: AiConfidenceItem | undefined) {
   if (!item) {
     return {
@@ -496,6 +649,9 @@ export function UniversalImportClient({
   const [aiConfidenceReport, setAiConfidenceReport] = useState<AiConfidenceItem[]>([]);
   const [aiProviderLabel, setAiProviderLabel] = useState("");
   const [aiModelLabel, setAiModelLabel] = useState("");
+  const [parseFailure, setParseFailure] = useState<ParseFailureState | null>(null);
+  const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot | null>(null);
+  const [submitSummary, setSubmitSummary] = useState<SubmitSummary | null>(null);
   const [transformConfigDrafts, setTransformConfigDrafts] = useState<Record<string, string>>({});
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
     "智能多格式批量下单系统",
@@ -608,14 +764,23 @@ export function UniversalImportClient({
   }
 
   function handleMappingColumnChange(field: UniversalImportField, value: string) {
-    const columnIndex = value === "" ? null : Number(value);
     const nextMapping = {
       ...mapping,
-      [field]: Number.isFinite(columnIndex) ? columnIndex : null,
+      [field]: null,
     } as UniversalImportMapping;
+    let nextRuleDsl = mergeRuleDslMapping(ruleDsl, nextMapping);
+
+    if (value.startsWith(TAIL_SOURCE_PREFIX)) {
+      nextRuleDsl = updateTailSourceField(nextRuleDsl, field, decodeTailSourceValue(value));
+    } else {
+      const columnIndex = value === "" ? null : Number(value);
+      nextMapping[field] = Number.isFinite(columnIndex) ? columnIndex : null;
+      nextRuleDsl = mergeRuleDslMapping(ruleDsl, nextMapping);
+      nextRuleDsl = updateTailSourceField(nextRuleDsl, field, []);
+    }
 
     setMapping(nextMapping);
-    syncRuleMapping(nextMapping);
+    setRuleDsl(nextRuleDsl);
     setRuleStatus("映射列已更新，请确认后保存规则。");
   }
 
@@ -901,10 +1066,14 @@ export function UniversalImportClient({
   }
 
   async function handleFileParse(file: File, nextFileType: SupportedImportFileType, nextMapping?: UniversalImportMapping, nextRuleDsl?: UniversalImportRuleDsl) {
+    const startedAt = performance.now();
     setSelectedFile(file);
     setFileName(file.name);
     setFileType(nextFileType);
     setStatus("");
+    setParseFailure(null);
+    setPerformanceSnapshot(null);
+    setSubmitSummary(null);
     setParseProgress({ active: true, value: 12, label: "正在试解析文件...", processed: 0, total: 100 });
 
     try {
@@ -938,9 +1107,24 @@ export function UniversalImportClient({
       );
       setTemplateInfo(`当前规则模式：${effectiveRuleDsl.mode}`);
       setStatus("文件解析成功，可继续编辑、保存规则或提交。");
+      setParseFailure(null);
+      setPerformanceSnapshot({
+        parseMs: Math.round(performance.now() - startedAt),
+        totalRows: data.rowCount ?? data.previewRows.length,
+        renderedRows: Math.min(data.previewRows.length, PREVIEW_INITIAL_RENDER_COUNT),
+        issueCount: data.issueCount ?? 0,
+        renderMode: data.previewRows.length > PREVIEW_INITIAL_RENDER_COUNT ? "batched" : "full",
+      });
       setParseProgress({ active: true, value: 100, label: "完成", processed: data.rowCount ?? 0, total: data.rowCount ?? 0 });
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "解析失败，请稍后重试。");
+      const message = error instanceof Error ? error.message : "解析失败，请稍后重试。";
+      setStatus(message);
+      setParseFailure({
+        message,
+        fileName: file.name,
+        fileType: nextFileType,
+        ruleName: ruleNameInput.trim() || "未命名规则",
+      });
     } finally {
       window.setTimeout(() => {
         setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
@@ -958,6 +1142,7 @@ export function UniversalImportClient({
     setAiSummary("正在生成 AI 规则建议...");
     setAiRiskNotes([]);
     setAiConfidenceReport([]);
+    setParseFailure(null);
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
@@ -1258,6 +1443,7 @@ export function UniversalImportClient({
       return;
     }
     setSubmitting(true);
+    setSubmitSummary(null);
     setSubmitProgress({
       active: true,
       value: 12,
@@ -1310,6 +1496,12 @@ export function UniversalImportClient({
           data.summary?.shipmentCount ?? 0
         } 个运单。`,
       );
+      setSubmitSummary({
+        successCount: data.summary?.successCount ?? draftRows.length,
+        failCount: data.summary?.failCount ?? 0,
+        shipmentCount: data.summary?.shipmentCount ?? 0,
+        submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+      });
       pushToast(`成功提交 ${data.summary?.shipmentCount ?? 0} 个运单`, "success");
       void loadHistory({ ...historyFilters, page: 1 });
       void loadHistoryCodes();
@@ -1655,6 +1847,38 @@ export function UniversalImportClient({
                       <p className="footnote">{aiSummary || ruleTestSummary || rowErrorSummary[0] || "这里会显示 AI 建议、试解析和校验结果。"}</p>
                     </div>
 
+                    {parseFailure ? (
+                      <div className="parse-failure-card">
+                        <div className="card-heading compact">
+                          <div>
+                            <p className="section-kicker">解析失败</p>
+                            <h3>请根据原始文件信息调整规则后再试解析</h3>
+                          </div>
+                          <button type="button" className="secondary-button" onClick={() => setActiveTab("rules")}>
+                            前往规则管理
+                          </button>
+                        </div>
+                        <div className="result-summary-grid">
+                          <div>
+                            <span>失败原因</span>
+                            <strong>{parseFailure.message}</strong>
+                          </div>
+                          <div>
+                            <span>原始文件</span>
+                            <strong>{parseFailure.fileName}</strong>
+                          </div>
+                          <div>
+                            <span>文件类型</span>
+                            <strong>{formatFileTypeLabel(parseFailure.fileType)}</strong>
+                          </div>
+                          <div>
+                            <span>当前规则</span>
+                            <strong>{parseFailure.ruleName}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
                     {aiProviderLabel || aiModelLabel ? (
                       <div className="overview-grid" style={{ marginTop: 16 }}>
                         <article className="overview-card">
@@ -1689,6 +1913,7 @@ export function UniversalImportClient({
                         {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                           const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
                           const currentColumn = mapping[field.key];
+                          const tailSourceOption = getTailSourceOption(ruleDsl, field.key);
 
                           return (
                             <label className="mapping-row" key={field.key}>
@@ -1697,7 +1922,7 @@ export function UniversalImportClient({
                                 <em className={`ai-confidence-badge ${aiStatus.tone}`}>{aiStatus.label}</em>
                               </span>
                               <select
-                                value={typeof currentColumn === "number" ? String(currentColumn) : ""}
+                                value={getMappingSelectValue(ruleDsl, field.key, currentColumn)}
                                 onChange={(event) => handleMappingColumnChange(field.key, event.target.value)}
                               >
                                 <option value="">{aiStatus.strategy === "tail" ? "建议由尾部信息提取" : "未映射"}</option>
@@ -1706,6 +1931,11 @@ export function UniversalImportClient({
                                     {formatColumnOption(option)}
                                   </option>
                                 ))}
+                                {tailSourceOption ? (
+                                  <option value={tailSourceOption.value}>
+                                    {getTailSourceOptionLabel(tailSourceOption)}
+                                  </option>
+                                ) : null}
                               </select>
                               <small className="mapping-hint">{aiStatus.detail}</small>
                             </label>
@@ -1758,36 +1988,46 @@ export function UniversalImportClient({
                       </div>
                     </div>
 
-                    <div className="table-shell import-table-shell">
-                      <table className="data-table import-table">
-                        <thead>
-                          <tr>
-                            <th className="checkbox-cell">
-                              <input
-                                type="checkbox"
-                                checked={allRowsSelected}
-                                onChange={(event) => setSelectedIds(event.target.checked ? draftRows.map((row) => row.id) : [])}
-                              />
-                            </th>
-                            <th>行号</th>
-                            {UNIVERSAL_IMPORT_FIELDS.map((field) => (
-                              <th key={field.key}>
-                                {field.label}
-                                {field.required ? "*" : ""}
-                              </th>
-                            ))}
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {draftRows.length === 0 ? (
+                    {draftRows.length === 0 ? (
+                      <div className="empty-state-card">
+                        <p className="section-kicker">空状态</p>
+                        <h3>还没有生成结构化预览数据</h3>
+                        <p>
+                          先上传 Excel / Word / PDF 样例文件，再手动选择已有规则，或点击“AI 生成规则建议”后人工确认字段映射并试解析。
+                        </p>
+                        <div className="toolbar" style={{ marginBottom: 0 }}>
+                          <button type="button" className="secondary-button" onClick={() => fileInputRef.current?.click()}>
+                            选择样例文件
+                          </button>
+                          <button type="button" className="tool-button" onClick={() => setActiveTab("rules")}>
+                            去规则管理新建规则
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="table-shell import-table-shell">
+                        <table className="data-table import-table">
+                          <thead>
                             <tr>
-                              <td colSpan={UNIVERSAL_IMPORT_FIELDS.length + 3} className="empty-row">
-                                上传样例文件并完成试解析后，这里会显示可编辑预览表格。
-                              </td>
+                              <th className="checkbox-cell">
+                                <input
+                                  type="checkbox"
+                                  checked={allRowsSelected}
+                                  onChange={(event) => setSelectedIds(event.target.checked ? draftRows.map((row) => row.id) : [])}
+                                />
+                              </th>
+                              <th>行号</th>
+                              {UNIVERSAL_IMPORT_FIELDS.map((field) => (
+                                <th key={field.key}>
+                                  {field.label}
+                                  {field.required ? "*" : ""}
+                                </th>
+                              ))}
+                              <th>操作</th>
                             </tr>
-                          ) : (
-                            visibleDraftRows.map((row, index) => {
+                          </thead>
+                          <tbody>
+                            {visibleDraftRows.map((row, index) => {
                               const rowIssues = rowErrorsById.get(row.id) ?? [];
                               return (
                                 <tr key={row.id} className={rowIssues.length > 0 ? "has-error" : ""}>
@@ -1828,11 +2068,11 @@ export function UniversalImportClient({
                                   </td>
                                 </tr>
                               );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
 
                     {hiddenPreviewRowCount > 0 ? (
                       <div className="preview-render-toolbar">
@@ -1903,6 +2143,34 @@ export function UniversalImportClient({
                           <span className="progress-bar" style={{ width: `${submitProgress.value}%` }} />
                         </div>
                       </div>
+                      {performanceSnapshot ? (
+                        <div className="performance-metrics">
+                          <div>
+                            <span>解析耗时</span>
+                            <strong>{performanceSnapshot.parseMs} ms</strong>
+                          </div>
+                          <div>
+                            <span>预览数据</span>
+                            <strong>{performanceSnapshot.totalRows} 行</strong>
+                          </div>
+                          <div>
+                            <span>首屏渲染</span>
+                            <strong>{performanceSnapshot.renderedRows} 行</strong>
+                          </div>
+                          <div>
+                            <span>渲染策略</span>
+                            <strong>{performanceSnapshot.renderMode === "batched" ? "分批渲染" : "一次渲染"}</strong>
+                          </div>
+                          <div>
+                            <span>校验问题</span>
+                            <strong>{performanceSnapshot.issueCount} 个</strong>
+                          </div>
+                          <div>
+                            <span>考试目标</span>
+                            <strong>{performanceSnapshot.parseMs <= 10000 ? "满足 10 秒内" : "需继续优化"}</strong>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </section>
 
@@ -1943,6 +2211,35 @@ export function UniversalImportClient({
                     {submitting ? "提交中..." : "提交下单"}
                   </button>
                 </div>
+
+                {submitSummary ? (
+                  <div className="result-summary-card">
+                    <div className="card-heading compact">
+                      <div>
+                        <p className="section-kicker">提交结果</p>
+                        <h3>批量下单结果汇总</h3>
+                      </div>
+                    </div>
+                    <div className="result-summary-grid">
+                      <div>
+                        <span>成功行数</span>
+                        <strong>{submitSummary.successCount}</strong>
+                      </div>
+                      <div>
+                        <span>失败行数</span>
+                        <strong>{submitSummary.failCount}</strong>
+                      </div>
+                      <div>
+                        <span>生成运单</span>
+                        <strong>{submitSummary.shipmentCount}</strong>
+                      </div>
+                      <div>
+                        <span>提交时间</span>
+                        <strong>{submitSummary.submittedAt}</strong>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </>
             ) : activeTab === "history" ? (
               <section className="workspace-card">
@@ -2194,6 +2491,7 @@ export function UniversalImportClient({
                           {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                             const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
                             const currentColumn = mapping[field.key];
+                            const tailSourceOption = getTailSourceOption(ruleDsl, field.key);
 
                             return (
                               <label className="mapping-row" key={field.key}>
@@ -2202,7 +2500,7 @@ export function UniversalImportClient({
                                   <em className={`ai-confidence-badge ${aiStatus.tone}`}>{aiStatus.label}</em>
                                 </span>
                                 <select
-                                  value={typeof currentColumn === "number" ? String(currentColumn) : ""}
+                                  value={getMappingSelectValue(ruleDsl, field.key, currentColumn)}
                                   onChange={(event) => handleMappingColumnChange(field.key, event.target.value)}
                                 >
                                   <option value="">{aiStatus.strategy === "tail" ? "建议由尾部信息提取" : "未映射"}</option>
@@ -2211,6 +2509,11 @@ export function UniversalImportClient({
                                       {formatColumnOption(option)}
                                     </option>
                                   ))}
+                                  {tailSourceOption ? (
+                                    <option value={tailSourceOption.value}>
+                                      {getTailSourceOptionLabel(tailSourceOption)}
+                                    </option>
+                                  ) : null}
                                 </select>
                                 <small className="mapping-hint">{aiStatus.detail}</small>
                               </label>

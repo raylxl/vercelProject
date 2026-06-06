@@ -15,7 +15,7 @@ type UniversalImportPageProps = {
 };
 
 export default async function UniversalImportPage({ searchParams }: UniversalImportPageProps) {
-  // 考试专用模式：本次考核不包含登录模块，访问系统即进入万能导入 V2。
+  // 考试模式直接进入万能导入 V2，不再展示非考试范围模块。
   const operatorName = await getOperatorNameFromSession();
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const initialTab =

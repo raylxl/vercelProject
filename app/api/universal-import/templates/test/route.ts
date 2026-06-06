@@ -66,6 +66,19 @@ export async function POST(request: Request) {
       rule: ruleDsl,
     });
 
+    if ((result.rowCount ?? result.previewRows.length) === 0) {
+      return NextResponse.json(
+        {
+          error: "未解析出任何有效下单数据，请检查样例文件、字段映射和 Transform Config 后重试。",
+          document,
+          summary: result.summary,
+          inferredMapping,
+          fingerprint: buildTemplateFingerprint(document.sheetName, document.headers),
+        },
+        { status: 422 },
+      );
+    }
+
     return NextResponse.json({
       ...result,
       fingerprint: buildTemplateFingerprint(document.sheetName, document.headers),

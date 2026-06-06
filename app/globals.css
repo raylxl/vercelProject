@@ -1585,6 +1585,83 @@ code {
   color: var(--muted);
 }
 
+.empty-state-card,
+.result-summary-card,
+.parse-failure-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(4, 116, 146, 0.12);
+  background: linear-gradient(180deg, #fbfeff 0%, #f6fbfd 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.empty-state-card h3,
+.result-summary-card h3,
+.parse-failure-card h3 {
+  margin: 0;
+  font-size: 1.16rem;
+}
+
+.empty-state-card p,
+.result-summary-card p,
+.parse-failure-card p {
+  margin: 0;
+}
+
+.empty-state-card > p:last-of-type,
+.parse-failure-card > p:last-of-type {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.result-summary-grid,
+.performance-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+
+.result-summary-grid > div,
+.performance-metrics > div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #dce8f1;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.result-summary-grid span,
+.performance-metrics span {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.result-summary-grid strong,
+.performance-metrics strong {
+  font-size: 1.06rem;
+  color: var(--text);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.parse-failure-card {
+  margin-top: 16px;
+  border-color: rgba(219, 75, 80, 0.2);
+  background: linear-gradient(180deg, #fffafa 0%, #fff5f5 100%);
+}
+
+.result-summary-card {
+  margin-top: 16px;
+}
+
+.performance-metrics {
+  margin-top: 2px;
+}
+
 .import-table-shell,
 .import-history-shell {
   overflow: auto;
@@ -1881,7 +1958,9 @@ code {
   .login-actions,
   .import-stat-grid,
   .mapping-grid,
-  .history-filters {
+  .history-filters,
+  .result-summary-grid,
+  .performance-metrics {
     grid-template-columns: 1fr;
   }
 

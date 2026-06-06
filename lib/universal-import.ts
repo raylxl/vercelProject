@@ -13,21 +13,21 @@ export const UNIVERSAL_IMPORT_FIELDS = [
   },
   {
     key: "receiverName",
-    label: "收货人姓名",
+    label: "收件人姓名",
     required: false,
-    aliases: ["收货人姓名", "收件人姓名", "收货人", "收件人", "receiver", "recipient"],
+    aliases: ["收件人姓名", "收货人姓名", "收件人", "收货人", "receiver", "recipient"],
   },
   {
     key: "receiverPhone",
-    label: "收货人电话",
+    label: "收件人电话",
     required: false,
-    aliases: ["收货人电话", "收件人电话", "联系电话", "手机", "receiverphone", "recipientphone"],
+    aliases: ["收件人电话", "收货人电话", "联系电话", "手机", "receiverphone", "recipientphone"],
   },
   {
     key: "receiverAddress",
-    label: "收货地址",
+    label: "收件人地址",
     required: false,
-    aliases: ["收货地址", "收件人地址", "收货人地址", "地址", "receiveraddress", "recipientaddress"],
+    aliases: ["收件人地址", "收货人地址", "收货地址", "地址", "receiveraddress", "recipientaddress"],
   },
   {
     key: "skuCode",
@@ -92,7 +92,7 @@ function normalizeText(value: unknown) {
     .trim()
     .toLowerCase()
     .replace(/[\s_-]+/g, "")
-    .replace(/[()[\]{}<>【】“”"'`’‘、，。；：！？,.!?/\\|]/g, "");
+    .replace(/[()[\]{}<>【】“”"'`‘’、，。；：！？,.!?/\\|]/g, "");
 }
 
 function normalizeDisplayValue(value: unknown) {
@@ -248,12 +248,14 @@ export function validateImportRows(
 
   rows.forEach((row, index) => {
     const externalCode = row.externalCode.trim();
-    if (externalCode) {
-      const normalized = normalizeExternalCode(externalCode);
-      const current = groupedRows.get(normalized) ?? [];
-      current.push(index + 1);
-      groupedRows.set(normalized, current);
+    if (!externalCode) {
+      return;
     }
+
+    const normalized = normalizeExternalCode(externalCode);
+    const current = groupedRows.get(normalized) ?? [];
+    current.push(index + 1);
+    groupedRows.set(normalized, current);
   });
 
   rows.forEach((row, index) => {
@@ -262,7 +264,16 @@ export function validateImportRows(
 
     if (externalCode) {
       const normalized = normalizeExternalCode(externalCode);
+      const duplicateRows = groupedRows.get(normalized) ?? [];
       const existing = existingLookup.get(normalized);
+
+      if (duplicateRows.length > 1) {
+        issues.push({
+          rowIndex: rowNumber,
+          field: "externalCode",
+          message: `与本批次第 ${duplicateRows.join("、")} 行外部编码重复`,
+        });
+      }
 
       if (existing) {
         issues.push({
@@ -283,7 +294,7 @@ export function validateImportRows(
       issues.push({
         rowIndex: rowNumber,
         field: "receiverStore",
-        message: "收货门店或收货人信息至少完整填写一组",
+        message: "收货门店或收件人信息至少完整填写一组",
       });
     }
 
@@ -320,7 +331,7 @@ export function validateImportRows(
 }
 
 export function formatIssueLabel(issue: UniversalImportIssue) {
-  return `第${issue.rowIndex}行，${UNIVERSAL_IMPORT_FIELD_LABELS[issue.field]}：${issue.message}`;
+  return `第 ${issue.rowIndex} 行，${UNIVERSAL_IMPORT_FIELD_LABELS[issue.field]}：${issue.message}`;
 }
 
 export function toSafeSheetName(name: string) {
