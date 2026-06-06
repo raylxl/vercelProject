@@ -11,9 +11,10 @@ import {
   type UniversalImportRuleDsl,
 } from "@/lib/universal-import-engine";
 import {
-  createSiliconFlowChatCompletion,
-  getSiliconFlowModel,
-  isSiliconFlowConfigured,
+  createLlmChatCompletion,
+  getConfiguredLlmModel,
+  getConfiguredLlmProvider,
+  isLlmConfigured,
 } from "@/lib/siliconflow";
 import { isAuthenticated } from "@/lib/operator-session";
 import { NextResponse } from "next/server";
@@ -51,7 +52,7 @@ type AiSuggestSuccessResponse = {
   suggestedRule: UniversalImportRuleDsl;
   confidenceReport: AiConfidenceItem[];
   riskNotes: string[];
-  provider: "siliconflow" | "fallback";
+  provider: "deepseek" | "siliconflow" | "fallback";
   model: string;
   aiSummary: string;
 };
@@ -346,7 +347,7 @@ function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, 
 }
 
 async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImportDocument>>, fileType: SupportedImportFileType, inferredMapping: UniversalImportMapping) {
-  const content = await createSiliconFlowChatCompletion({
+  const content = await createLlmChatCompletion({
     messages: [
       {
         role: "system",
@@ -426,7 +427,7 @@ export async function POST(request: Request) {
 
     const inferredMapping = inferMappingFromHeaders(document.headers);
 
-    if (!isSiliconFlowConfigured()) {
+    if (!isLlmConfigured()) {
       return NextResponse.json(createFallbackSuggestion(fileType, inferredMapping, document));
     }
 
@@ -445,12 +446,12 @@ export async function POST(request: Request) {
         suggestedRule: llmResult.suggestedRule,
         confidenceReport: llmResult.confidenceReport,
         riskNotes: llmResult.riskNotes,
-        provider: "siliconflow",
-        model: getSiliconFlowModel(),
+        provider: getConfiguredLlmProvider(),
+        model: getConfiguredLlmModel(),
         aiSummary: llmResult.aiSummary,
       });
     } catch (llmError) {
-      console.error("SiliconFlow ai-suggest failed, fallback to heuristic", llmError);
+      console.error("LLM ai-suggest failed, fallback to heuristic", llmError);
       return NextResponse.json(createFallbackSuggestion(fileType, inferredMapping, document));
     }
   } catch (error) {

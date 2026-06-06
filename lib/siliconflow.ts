@@ -1,19 +1,27 @@
-const DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1";
-const DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4-Pro";
+const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+const DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1";
+const DEFAULT_SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V4-Pro";
 const DEFAULT_TIMEOUT_MS = 280000;
+
+export type LlmProvider = "deepseek" | "siliconflow";
 
 export type SiliconFlowMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
 
-type SiliconFlowResponseFormat = {
-  type: "json_schema";
-  json_schema: {
-    name: string;
-    schema: Record<string, unknown>;
-  };
-};
+type SiliconFlowResponseFormat =
+  | {
+      type: "json_schema";
+      json_schema: {
+        name: string;
+        schema: Record<string, unknown>;
+      };
+    }
+  | {
+      type: "json_object";
+    };
 
 type ChatCompletionOptions = {
   messages: SiliconFlowMessage[];
@@ -38,45 +46,79 @@ type ChatCompletionResponse = {
   };
 };
 
-function getBaseUrl() {
-  return process.env.SILICONFLOW_BASE_URL?.trim() || DEFAULT_BASE_URL;
+function getDeepSeekBaseUrl() {
+  return process.env.DEEPSEEK_BASE_URL?.trim() || DEFAULT_DEEPSEEK_BASE_URL;
 }
 
-function getApiKey() {
+function getSiliconFlowBaseUrl() {
+  return process.env.SILICONFLOW_BASE_URL?.trim() || DEFAULT_SILICONFLOW_BASE_URL;
+}
+
+function getDeepSeekApiKey() {
+  return process.env.DEEPSEEK_API_KEY?.trim() || "";
+}
+
+function getSiliconFlowApiKey() {
   return process.env.SILICONFLOW_API_KEY?.trim() || "";
 }
 
+export function getDeepSeekModel() {
+  return process.env.DEEPSEEK_MODEL?.trim() || DEFAULT_DEEPSEEK_MODEL;
+}
+
 export function getSiliconFlowModel() {
-  return process.env.SILICONFLOW_MODEL?.trim() || DEFAULT_MODEL;
+  return process.env.SILICONFLOW_MODEL?.trim() || DEFAULT_SILICONFLOW_MODEL;
+}
+
+export function isDeepSeekConfigured() {
+  return Boolean(getDeepSeekApiKey());
 }
 
 export function isSiliconFlowConfigured() {
-  return Boolean(getApiKey());
+  return Boolean(getSiliconFlowApiKey());
 }
 
-export async function createSiliconFlowChatCompletion(options: ChatCompletionOptions) {
-  const apiKey = getApiKey();
+export function getConfiguredLlmProvider(): LlmProvider {
+  return isDeepSeekConfigured() ? "deepseek" : "siliconflow";
+}
+
+export function isLlmConfigured() {
+  return isDeepSeekConfigured() || isSiliconFlowConfigured();
+}
+
+export function getConfiguredLlmModel() {
+  return getConfiguredLlmProvider() === "deepseek" ? getDeepSeekModel() : getSiliconFlowModel();
+}
+
+export async function createLlmChatCompletion(options: ChatCompletionOptions & { provider?: LlmProvider }) {
+  const provider = options.provider ?? getConfiguredLlmProvider();
+  const apiKey = provider === "deepseek" ? getDeepSeekApiKey() : getSiliconFlowApiKey();
+  const baseUrl = provider === "deepseek" ? getDeepSeekBaseUrl() : getSiliconFlowBaseUrl();
+  const model = provider === "deepseek" ? getDeepSeekModel() : getSiliconFlowModel();
 
   if (!apiKey) {
-    throw new Error("SILICONFLOW_API_KEY is not configured");
+    throw new Error(`${provider === "deepseek" ? "DEEPSEEK_API_KEY" : "SILICONFLOW_API_KEY"} is not configured`);
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${getBaseUrl()}/chat/completions`, {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: getSiliconFlowModel(),
+        model,
         messages: options.messages,
         temperature: options.temperature ?? 0.1,
         max_tokens: options.maxTokens ?? 2000,
-        response_format: options.responseFormat,
+        response_format:
+          provider === "deepseek"
+            ? { type: "json_object" }
+            : options.responseFormat,
       }),
       signal: controller.signal,
     });
@@ -97,4 +139,8 @@ export async function createSiliconFlowChatCompletion(options: ChatCompletionOpt
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function createSiliconFlowChatCompletion(options: ChatCompletionOptions) {
+  return createLlmChatCompletion({ ...options, provider: "siliconflow" });
 }

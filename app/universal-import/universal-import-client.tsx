@@ -660,7 +660,13 @@ export function UniversalImportClient({
       setSheetName(data.documentSummary.sheetName);
       setAiRiskNotes(data.riskNotes ?? []);
       setAiConfidenceReport(data.confidenceReport ?? []);
-      setAiProviderLabel(data.provider === "siliconflow" ? "SiliconFlow 实时生成" : "本地兜底规则");
+      setAiProviderLabel(
+        data.provider === "deepseek"
+          ? "DeepSeek 官网实时生成"
+          : data.provider === "siliconflow"
+            ? "SiliconFlow 实时生成"
+            : "本地兜底规则",
+      );
       setAiModelLabel(data.model ?? "");
       setAiSummary(
         data.aiSummary ||
