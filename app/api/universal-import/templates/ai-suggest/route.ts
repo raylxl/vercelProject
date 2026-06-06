@@ -186,6 +186,22 @@ function mergeTransforms(baseRule: UniversalImportRuleDsl, enabledTransforms: st
   };
 }
 
+function summarizeDocumentStructure(document: Awaited<ReturnType<typeof parseImportDocument>>) {
+  const firstSection = document.sections[0];
+  const headRows = firstSection?.rows.slice(0, 8) ?? [];
+  const tailRows = firstSection?.rows.slice(-8) ?? [];
+  const detailRows = firstSection?.rows
+    .filter((row) => row.some((cell) => /ZBWP|SKU|物品编码|商品编码/i.test(cell)))
+    .slice(0, 12) ?? [];
+
+  return {
+    headRows,
+    detailRows,
+    tailRows,
+    sectionTitles: document.sections.map((section) => section.title).slice(0, 8),
+  };
+}
+
 function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, fileType: SupportedImportFileType) {
   const sectionPreview = document.sections.slice(0, 4).map((section, index) => ({
     index,
@@ -193,6 +209,7 @@ function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, 
     rowCount: section.rows.length,
     rows: section.rows.slice(0, 8),
   }));
+  const structureSummary = summarizeDocumentStructure(document);
 
   return JSON.stringify(
     {
@@ -203,6 +220,7 @@ function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, 
       rawRowCount: document.rawRows.length,
       sectionCount: document.sections.length,
       sectionPreview,
+      structureSummary,
       textPreview: document.textContent.slice(0, 2600),
       targetFields: UNIVERSAL_IMPORT_FIELDS.map((field) => ({
         key: field.key,
@@ -227,6 +245,8 @@ function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, 
         "enabledTransforms 只返回需要启用的 transform type",
         "enabledTransforms 只能从给定的 availableTransforms 中选择",
         "如果文档是 PDF 或弱结构文本，请重点说明哪些字段需要通过尾部文本、分段或卡片拆分提取",
+        "如果结构摘要里已经出现收货人、收货电话、收货地址、收货门店等键值，请优先依据这些信息给出风险说明",
+        "如果明细行中 SKU 编码、名称、规格、单位、数量出现在同一行，请给出更明确的结构化建议",
       ],
     },
     null,
