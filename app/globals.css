@@ -1359,6 +1359,29 @@ code {
   margin-bottom: 0;
 }
 
+.mapping-source-note {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid rgba(20, 196, 207, 0.18);
+  border-radius: 12px;
+  background: rgba(230, 249, 251, 0.55);
+}
+
+.mapping-source-note strong,
+.mapping-source-note span {
+  display: block;
+}
+
+.mapping-source-note span {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
 .mapping-action-row {
   grid-column: 1 / -1;
   display: flex;

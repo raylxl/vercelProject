@@ -45,6 +45,12 @@ type AiSuggestSuccessResponse = {
     fileType: SupportedImportFileType;
     sheetName: string;
     headers: string[];
+    headerRowIndex: number;
+    columnOptions: Array<{
+      index: number;
+      header: string;
+      samples: string[];
+    }>;
     rowCount: number;
     sectionCount: number;
     textPreview: string;
@@ -132,29 +138,188 @@ async function ensureExamModeAccess() {
   return null;
 }
 
+function normalizeHeaderText(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "")
+    .replace(/[()[\]{}<>【】“”"'`’‘、，。；：！？,.!?/\\|]/g, "");
+}
+
+function scoreHeaderRow(row: string[]) {
+  const normalizedCells = row.map((cell) => normalizeHeaderText(cell)).filter(Boolean);
+  if (normalizedCells.length === 0) {
+    return 0;
+  }
+
+  const aliasScore = UNIVERSAL_IMPORT_FIELDS.reduce((score, field) => {
+    const aliases = field.aliases.map((alias) => normalizeHeaderText(alias)).filter(Boolean);
+    const matched = normalizedCells.some((cell) =>
+      aliases.some((alias) => cell === alias || cell.includes(alias) || alias.includes(cell)),
+    );
+    return score + (matched ? 4 : 0);
+  }, 0);
+
+  return normalizedCells.length + aliasScore;
+}
+
+function inferBestHeaderRowIndex(document: Awaited<ReturnType<typeof parseImportDocument>>) {
+  const rows = document.sections[0]?.rows ?? [];
+  const candidates = rows.slice(0, 12);
+  if (candidates.length === 0) {
+    return 0;
+  }
+
+  return candidates.reduce(
+    (best, row, index) => {
+      const score = scoreHeaderRow(row);
+      return score > best.score ? { index, score } : best;
+    },
+    { index: 0, score: 0 },
+  ).index;
+}
+
+function getTransformConfig(rule: UniversalImportRuleDsl, transformType: string) {
+  return rule.transforms.find((transform) => transform.type === transformType)?.config;
+}
+
+function getRecommendedHeaderRowIndex(document: Awaited<ReturnType<typeof parseImportDocument>>, rule: UniversalImportRuleDsl) {
+  const headerConfig = getTransformConfig(rule, "header_mapping");
+  const matrixConfig = getTransformConfig(rule, "matrix_pivot");
+  const explicit = headerConfig?.headerRowIndex ?? matrixConfig?.headerRowIndex;
+
+  if (typeof explicit === "number" && Number.isFinite(explicit) && explicit >= 0) {
+    return explicit;
+  }
+
+  if (typeof explicit === "string" && /^\d+$/.test(explicit.trim())) {
+    return Number(explicit);
+  }
+
+  return inferBestHeaderRowIndex(document);
+}
+
+function buildColumnOptions(document: Awaited<ReturnType<typeof parseImportDocument>>, headerRowIndex: number) {
+  const rows = document.sections[0]?.rows ?? [];
+  const headers = rows[headerRowIndex] ?? document.headers ?? [];
+  const maxColumnCount = rows.reduce((max, row) => Math.max(max, row.length), headers.length);
+  const sampleRows = rows.slice(headerRowIndex + 1, headerRowIndex + 8);
+
+  return Array.from({ length: maxColumnCount }, (_, index) => ({
+    index,
+    header: headers[index] || "",
+    samples: sampleRows
+      .map((row) => row[index])
+      .filter((value): value is string => Boolean(value?.trim()))
+      .slice(0, 3),
+  }));
+}
+
+function buildDocumentSummary(
+  fileType: SupportedImportFileType,
+  document: Awaited<ReturnType<typeof parseImportDocument>>,
+  rule: UniversalImportRuleDsl,
+) {
+  const headerRowIndex = getRecommendedHeaderRowIndex(document, rule);
+  const columnOptions = buildColumnOptions(document, headerRowIndex);
+
+  return {
+    fileType,
+    sheetName: document.sheetName,
+    headers: columnOptions.map((option) => option.header),
+    headerRowIndex,
+    columnOptions,
+    rowCount: document.rawRows.length,
+    sectionCount: document.sections.length,
+    textPreview: document.textContent.slice(0, 800),
+  };
+}
+
+function getAiConfiguredFieldColumns(configs: Record<string, Record<string, unknown>> | undefined) {
+  if (!configs) {
+    return undefined;
+  }
+
+  const headerConfig = normalizeAiTransformConfig(configs.header_mapping ?? configs.headerMapping);
+  const candidate = headerConfig.fieldColumns;
+  if (!isRecord(candidate)) {
+    return undefined;
+  }
+
+  return candidate as Partial<Record<UniversalImportField, number | null>>;
+}
+
+function mergeMappingCandidates(
+  primary: Partial<Record<UniversalImportField, number | null>> | undefined,
+  secondary: Partial<Record<UniversalImportField, number | null>> | undefined,
+  fallback: UniversalImportMapping,
+) {
+  return Object.fromEntries(
+    UNIVERSAL_IMPORT_FIELDS.map((field) => {
+      const primaryValue = primary?.[field.key];
+      const secondaryValue = secondary?.[field.key];
+      return [
+        field.key,
+        typeof primaryValue === "number"
+          ? primaryValue
+          : typeof secondaryValue === "number"
+            ? secondaryValue
+            : fallback[field.key],
+      ];
+    }),
+  ) as UniversalImportMapping;
+}
+
+function applyHeaderRecommendation(rule: UniversalImportRuleDsl, headerRowIndex: number, mapping: UniversalImportMapping) {
+  const nextDataStartRowIndex = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value > headerRowIndex
+      ? value
+      : headerRowIndex + 1;
+
+  return {
+    ...rule,
+    mapping,
+    transforms: rule.transforms.map((transform) =>
+      transform.type === "header_mapping"
+        ? {
+            ...transform,
+            enabled: true,
+            config: {
+              ...(transform.config ?? {}),
+              headerRowIndex,
+              dataStartRowIndex: nextDataStartRowIndex(transform.config?.dataStartRowIndex),
+              fieldColumns: mapping,
+            },
+          }
+        : transform,
+    ),
+  };
+}
+
 function createFallbackSuggestion(
   fileType: SupportedImportFileType,
   suggestedMapping: UniversalImportMapping,
   document: Awaited<ReturnType<typeof parseImportDocument>>,
 ): AiSuggestSuccessResponse {
   const suggestedRule = createDefaultRuleDsl(suggestedMapping, fileType);
+  const headerRowIndex = inferBestHeaderRowIndex(document);
+  const columnOptions = buildColumnOptions(document, headerRowIndex);
+  const effectiveHeaders = columnOptions.map((option) => option.header);
+  const effectiveMapping = fileType === "excel"
+    ? mergeMappingCandidates(undefined, inferMappingFromHeaders(effectiveHeaders), suggestedMapping)
+    : suggestedMapping;
+  const recommendedRule = applyHeaderRecommendation(suggestedRule, headerRowIndex, effectiveMapping);
   const confidenceReport = UNIVERSAL_IMPORT_FIELDS.map((field) => ({
     field: field.key,
-    confidence: typeof suggestedMapping[field.key] === "number" ? 0.92 : 0.45,
-    source: typeof suggestedMapping[field.key] === "number" ? "header-match" : "heuristic-fallback",
+    confidence: typeof effectiveMapping[field.key] === "number" ? 0.92 : 0.45,
+    source: typeof effectiveMapping[field.key] === "number" ? "header-match" : "heuristic-fallback",
   }));
 
   return {
-    documentSummary: {
-      fileType,
-      sheetName: document.sheetName,
-      headers: document.headers,
-      rowCount: document.rawRows.length,
-      sectionCount: document.sections.length,
-      textPreview: document.textContent.slice(0, 800),
-    },
+    documentSummary: buildDocumentSummary(fileType, document, recommendedRule),
     suggestedRule: {
-      ...suggestedRule,
+      ...recommendedRule,
       aiConfidenceReport: confidenceReport,
     },
     confidenceReport,
@@ -318,11 +483,22 @@ function summarizeDocumentStructure(document: Awaited<ReturnType<typeof parseImp
   const detailRows = firstSection?.rows
     .filter((row) => row.filter(Boolean).length >= 3)
     .slice(0, 12) ?? [];
+  const headerCandidates = (firstSection?.rows ?? [])
+    .slice(0, 12)
+    .map((row, index) => ({
+      rowIndex: index,
+      score: scoreHeaderRow(row),
+      cells: row,
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 5);
 
   return {
     headRows,
     detailRows,
     tailRows,
+    headerCandidates,
     sectionTitles: document.sections.map((section) => section.title).slice(0, 8),
   };
 }
@@ -388,6 +564,7 @@ function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, 
         "如果文档是 PDF 或弱结构文本，请重点说明哪些字段需要通过尾部文本、分段或卡片拆分提取",
         "如果结构摘要里已经出现收货人、收货电话、收货地址、收货门店等键值，请优先依据这些信息给出风险说明",
         "如果明细行中 SKU 编码、名称、规格、单位、数量出现在同一行，请给出更明确的结构化建议",
+        "如果 structureSummary.headerCandidates 给出了高分候选行，请优先选择该行作为 header_mapping.config.headerRowIndex，并基于该行列号输出 mapping 或 fieldColumns",
       ],
     },
     null,
@@ -423,17 +600,35 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
   const parsed = parseAiJson(content);
   const confidenceReport = normalizeConfidenceReport(parsed.confidenceReport);
   const riskNotes = normalizeRiskNotes(parsed.riskNotes);
-  const mapping = normalizeMapping(isRecord(parsed.mapping) ? parsed.mapping : undefined, inferredMapping);
-  const baseRule = createDefaultRuleDsl(mapping, fileType);
+  const transformConfigs = isRecord(parsed.transformConfigs)
+    ? parsed.transformConfigs as Record<string, Record<string, unknown>>
+    : undefined;
+  const aiMapping = mergeMappingCandidates(
+    isRecord(parsed.mapping) ? parsed.mapping : undefined,
+    getAiConfiguredFieldColumns(transformConfigs),
+    inferredMapping,
+  );
+  const baseRule = createDefaultRuleDsl(aiMapping, fileType);
   const mode = parsed.mode ?? baseRule.mode;
-  const suggestedRule = ensureMultiSectionMerge(mergeTransformConfigs(mergeTransforms(
+  const mergedRule = ensureMultiSectionMerge(mergeTransformConfigs(mergeTransforms(
     {
       ...baseRule,
       mode,
-      mapping,
+      mapping: aiMapping,
     },
     normalizeEnabledTransforms(parsed.enabledTransforms),
-  ), isRecord(parsed.transformConfigs) ? parsed.transformConfigs as Record<string, Record<string, unknown>> : undefined), document.sections.length);
+  ), transformConfigs), document.sections.length);
+  const headerRowIndex = getRecommendedHeaderRowIndex(document, mergedRule);
+  const headerMapping = inferMappingFromHeaders(
+    buildColumnOptions(document, headerRowIndex).map((option) => option.header),
+  );
+  const headerBackedMapping = mergeMappingCandidates(undefined, headerMapping, inferredMapping);
+  const mapping = mergeMappingCandidates(
+    isRecord(parsed.mapping) ? parsed.mapping : undefined,
+    getAiConfiguredFieldColumns(transformConfigs),
+    headerBackedMapping,
+  );
+  const suggestedRule = applyHeaderRecommendation(mergedRule, headerRowIndex, mapping);
 
   const normalizedConfidenceReport =
       confidenceReport?.map((item) => ({
@@ -491,14 +686,7 @@ export async function POST(request: Request) {
       const llmResult = await generateRuleWithLlm(document, fileType, inferredMapping);
 
       return NextResponse.json({
-        documentSummary: {
-          fileType,
-          sheetName: document.sheetName,
-          headers: document.headers,
-          rowCount: document.rawRows.length,
-          sectionCount: document.sections.length,
-          textPreview: document.textContent.slice(0, 800),
-        },
+        documentSummary: buildDocumentSummary(fileType, document, llmResult.suggestedRule),
         suggestedRule: llmResult.suggestedRule,
         confidenceReport: llmResult.confidenceReport,
         riskNotes: llmResult.riskNotes,

@@ -115,11 +115,19 @@ type RuleTestResponse = {
   error?: string;
 };
 
+type ColumnOption = {
+  index: number;
+  header: string;
+  samples: string[];
+};
+
 type AiSuggestResponse = {
   documentSummary?: {
     fileType: SupportedImportFileType;
     sheetName: string;
     headers: string[];
+    headerRowIndex?: number;
+    columnOptions?: ColumnOption[];
     rowCount: number;
     sectionCount: number;
   };
@@ -269,6 +277,53 @@ function getSampleHeaders(sampleMeta: unknown) {
   return headers.map((header) => String(header ?? ""));
 }
 
+function toColumnOptions(headers: string[]): ColumnOption[] {
+  return headers.map((header, index) => ({
+    index,
+    header,
+    samples: [],
+  }));
+}
+
+function getRuleHeaderRowIndex(rule: UniversalImportRuleDsl) {
+  const config = rule.transforms.find((transform) => transform.type === "header_mapping")?.config;
+  const value = config?.headerRowIndex;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return Number(value);
+  }
+  return 0;
+}
+
+function buildColumnOptionsFromDocument(document: RuleTestResponse["document"], rule: UniversalImportRuleDsl): ColumnOption[] {
+  if (!document) {
+    return [];
+  }
+
+  const rows = document.sections[0]?.rows ?? [];
+  const headerRowIndex = getRuleHeaderRowIndex(rule);
+  const headers = rows[headerRowIndex] ?? document.headers ?? [];
+  const maxColumnCount = rows.reduce((max, row) => Math.max(max, row.length), headers.length);
+  const sampleRows = rows.slice(headerRowIndex + 1, headerRowIndex + 8);
+
+  return Array.from({ length: maxColumnCount }, (_, index) => ({
+    index,
+    header: headers[index] || "",
+    samples: sampleRows
+      .map((row) => row[index])
+      .filter((value): value is string => Boolean(value?.trim()))
+      .slice(0, 3),
+  }));
+}
+
+function formatColumnOption(option: ColumnOption) {
+  const header = option.header || "未命名列";
+  const samples = option.samples.length > 0 ? `｜样例：${option.samples.join(" / ")}` : "";
+  return `${option.index + 1}. ${header}${samples}`;
+}
+
 function buildDefaultRuleDsl(mapping: UniversalImportMapping, fileType: SupportedImportFileType): UniversalImportRuleDsl {
   return {
     fileType,
@@ -370,6 +425,7 @@ export function UniversalImportClient({
   const [sheetName, setSheetName] = useState("Sheet1");
   const [fingerprint, setFingerprint] = useState("");
   const [headers, setHeaders] = useState<string[]>([]);
+  const [columnOptions, setColumnOptions] = useState<ColumnOption[]>([]);
   const [draftRows, setDraftRows] = useState<DraftRow[]>([]);
   const [mapping, setMapping] = useState<UniversalImportMapping>(DEFAULT_MAPPING);
   const [ruleDsl, setRuleDsl] = useState<UniversalImportRuleDsl>(buildDefaultRuleDsl(DEFAULT_MAPPING, "excel"));
@@ -483,6 +539,8 @@ export function UniversalImportClient({
   );
   const hiddenPreviewRowCount = Math.max(draftRows.length - visibleDraftRows.length, 0);
   const groupedPreviewCount = useMemo(() => new Set(draftRows.map((row) => row.externalCode.trim())).size, [draftRows]);
+  const activeColumnOptions = columnOptions.length > 0 ? columnOptions : toColumnOptions(headers);
+  const activeHeaderRowIndex = getRuleHeaderRowIndex(ruleDsl);
   const aiConfidenceByField = useMemo(
     () => new Map(aiConfidenceReport.map((item) => [item.field, item] as const)),
     [aiConfidenceReport],
@@ -732,6 +790,7 @@ export function UniversalImportClient({
     setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
     setSelectedIds([]);
     setHeaders([]);
+    setColumnOptions([]);
     setFingerprint("");
     setRuleTestSummary("");
     setAiSummary("");
@@ -779,6 +838,7 @@ export function UniversalImportClient({
     setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
     setSelectedIds([]);
     setHeaders([]);
+    setColumnOptions([]);
     setFingerprint("");
     setRuleTestSummary("");
     setTransformConfigDrafts({});
@@ -791,7 +851,15 @@ export function UniversalImportClient({
     setStatus("文件类型已变更，请重新在“选择解析规则”中选择已保存规则。");
   }
 
-  function applyRuleToState(rows: UniversalImportRow[], nextMapping: UniversalImportMapping, nextRuleDsl: UniversalImportRuleDsl, nextSheetName: string, nextFingerprint: string, nextHeaders: string[]) {
+  function applyRuleToState(
+    rows: UniversalImportRow[],
+    nextMapping: UniversalImportMapping,
+    nextRuleDsl: UniversalImportRuleDsl,
+    nextSheetName: string,
+    nextFingerprint: string,
+    nextHeaders: string[],
+    nextColumnOptions = toColumnOptions(nextHeaders),
+  ) {
     setDraftRows(toDraftRows(rows));
     setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
     setMapping(nextMapping);
@@ -799,6 +867,7 @@ export function UniversalImportClient({
     setSheetName(nextSheetName);
     setFingerprint(nextFingerprint);
     setHeaders(nextHeaders);
+    setColumnOptions(nextColumnOptions);
     setSelectedIds([]);
     setTransformConfigDrafts({});
   }
@@ -827,13 +896,15 @@ export function UniversalImportClient({
         throw new Error(data.error ?? "解析失败，请稍后重试。");
       }
 
+      const nextColumnOptions = buildColumnOptionsFromDocument(data.document, effectiveRuleDsl);
       applyRuleToState(
         data.previewRows,
-        data.inferredMapping ?? effectiveMapping,
+        effectiveMapping,
         effectiveRuleDsl,
         data.document.sheetName,
         data.fingerprint,
-        data.document.headers,
+        nextColumnOptions.map((option) => option.header),
+        nextColumnOptions,
       );
       setRuleTestSummary(
         `试解析完成：输出 ${data.rowCount ?? 0} 行，发现 ${data.issueCount ?? 0} 个校验问题。`,
@@ -882,7 +953,11 @@ export function UniversalImportClient({
       setFingerprint("");
       setRuleTestSummary("");
       setMapping(normalizedMapping);
-      setHeaders(data.documentSummary.headers);
+      const nextColumnOptions = data.documentSummary.columnOptions?.length
+        ? data.documentSummary.columnOptions
+        : toColumnOptions(data.documentSummary.headers);
+      setHeaders(nextColumnOptions.map((option) => option.header));
+      setColumnOptions(nextColumnOptions);
       setSheetName(data.documentSummary.sheetName);
       setAiRiskNotes(data.riskNotes ?? []);
       setAiConfidenceReport(data.confidenceReport ?? []);
@@ -1001,6 +1076,7 @@ export function UniversalImportClient({
     setAiProviderLabel("");
     setAiModelLabel("");
     setHeaders(sampleHeaders);
+    setColumnOptions(toColumnOptions(sampleHeaders));
     setFileType(rule.fileType as SupportedImportFileType);
     setDraftRows([]);
     setSelectedIds([]);
@@ -1515,6 +1591,10 @@ export function UniversalImportClient({
 
                     {headers.length > 0 ? (
                       <div className="mapping-grid">
+                        <div className="mapping-source-note">
+                          <strong>AI 推荐表头行：第 {activeHeaderRowIndex + 1} 行</strong>
+                          <span>下拉项已按 AI 推荐规则展示列号、表头和样例值；带“需确认”的字段请人工复核后再保存。</span>
+                        </div>
                         {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                           const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
                           const currentColumn = mapping[field.key];
@@ -1530,9 +1610,9 @@ export function UniversalImportClient({
                                 onChange={(event) => handleMappingColumnChange(field.key, event.target.value)}
                               >
                                 <option value="">未映射</option>
-                                {headers.map((header, index) => (
-                                  <option value={index} key={`${header}-${index}`}>
-                                    {index + 1}. {header || "未命名列"}
+                                {activeColumnOptions.map((option) => (
+                                  <option value={option.index} key={`${option.header}-${option.index}`}>
+                                    {formatColumnOption(option)}
                                   </option>
                                 ))}
                               </select>
@@ -2016,6 +2096,7 @@ export function UniversalImportClient({
                           <p className="section-kicker">字段映射</p>
                           <h3>人工确认 AI 映射列</h3>
                         </div>
+                        <span className="history-pill">表头第 {activeHeaderRowIndex + 1} 行</span>
                       </div>
                       {headers.length > 0 ? (
                         <div className="mapping-grid rule-mapping-grid">
@@ -2034,9 +2115,9 @@ export function UniversalImportClient({
                                   onChange={(event) => handleMappingColumnChange(field.key, event.target.value)}
                                 >
                                   <option value="">未映射</option>
-                                  {headers.map((header, index) => (
-                                    <option value={index} key={`${header}-${index}`}>
-                                      {index + 1}. {header || "未命名列"}
+                                  {activeColumnOptions.map((option) => (
+                                    <option value={option.index} key={`${option.header}-${option.index}`}>
+                                      {formatColumnOption(option)}
                                     </option>
                                   ))}
                                 </select>
