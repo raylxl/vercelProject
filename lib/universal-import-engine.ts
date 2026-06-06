@@ -411,6 +411,11 @@ function regexMatchesText(pattern: string | undefined, text: string) {
     return true;
   }
 
+  const compactText = text.replace(/[\s|]+/g, "");
+  if (compactText && regex?.test(compactText)) {
+    return true;
+  }
+
   return Boolean(createRelaxedKeyValueRegex(pattern, "i")?.test(text));
 }
 
@@ -833,14 +838,23 @@ function parseTextItems(
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(text)) !== null) {
+    const skuCode = getCapture(match, itemConfig?.skuCodeGroup, 1);
+    const skuName = getCapture(match, itemConfig?.skuNameGroup, 2);
+    const skuSpec = getCapture(match, itemConfig?.skuSpecGroup, 3);
+    const skuQuantity = getCapture(match, itemConfig?.skuQuantityGroup, 4);
+
+    if (!skuCode || !skuName || !isPositiveQuantity(skuQuantity)) {
+      continue;
+    }
+
     output.push(
       rowFromValues(
         {
           ...baseValues,
-          skuCode: getCapture(match, itemConfig?.skuCodeGroup, 1),
-          skuName: getCapture(match, itemConfig?.skuNameGroup, 2),
-          skuSpec: getCapture(match, itemConfig?.skuSpecGroup, 3),
-          skuQuantity: getCapture(match, itemConfig?.skuQuantityGroup, 4),
+          skuCode,
+          skuName,
+          skuSpec,
+          skuQuantity,
         },
         rowOffset + output.length + 1,
       ),
