@@ -327,14 +327,26 @@ function formatColumnOption(option: ColumnOption) {
 function buildDefaultRuleDsl(mapping: UniversalImportMapping, fileType: SupportedImportFileType): UniversalImportRuleDsl {
   return {
     fileType,
-    mode: fileType === "excel" ? "mapping" : "text",
+    mode: fileType === "excel" ? "structured" : "text",
     mapping,
     transforms: [
-      { type: "header_mapping", enabled: fileType === "excel" },
+      {
+        type: "header_mapping",
+        enabled: fileType === "excel",
+        config: {
+          headerRowIndex: 0,
+          dataStartRowIndex: 1,
+          fieldColumns: mapping,
+          requiredRowFields: ["skuCode", "skuName", "skuQuantity"],
+        },
+      },
       { type: "multisheet_merge", enabled: fileType === "excel" },
       { type: "group_by_external_code", enabled: true },
-      { type: "split_multiline_cell", enabled: true, config: { field: "skuName", quantityField: "skuQuantity" } },
-      { type: "tail_text_extract", enabled: fileType !== "excel" },
+      { type: "matrix_pivot", enabled: false },
+      { type: "split_multiline_cell", enabled: false },
+      { type: "tail_text_extract", enabled: false },
+      { type: "card_split", enabled: false },
+      { type: "text_record_split", enabled: fileType !== "excel" },
     ],
   };
 }
@@ -419,6 +431,9 @@ export function UniversalImportClient({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cellRefs = useRef(new Map<string, HTMLInputElement>());
   const toastTimerRef = useRef<number | null>(null);
+  const autoPreviewTimerRef = useRef<number | null>(null);
+  const lastAutoPreviewSignatureRef = useRef("");
+  const autoPreviewBusyRef = useRef(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileType, setFileType] = useState<SupportedImportFileType>("excel");
   const [fileName, setFileName] = useState("");
@@ -877,7 +892,6 @@ export function UniversalImportClient({
     setFileName(file.name);
     setFileType(nextFileType);
     setStatus("");
-    setAiSummary("");
     setParseProgress({ active: true, value: 12, label: "正在试解析文件...", processed: 0, total: 100 });
 
     try {
@@ -1155,6 +1169,18 @@ export function UniversalImportClient({
     }
   }
 
+  function shouldAutoPreview() {
+    if (!selectedFile || aiSuggesting || activeTab === "history") {
+      return false;
+    }
+
+    if (activeTab === "import" && !selectedRuleId && headers.length === 0) {
+      return false;
+    }
+
+    return Boolean(selectedRuleId || headers.length > 0 || aiConfidenceReport.length > 0);
+  }
+
   function handleCellChange(rowId: string, field: UniversalImportField, value: string) {
     setDraftRows((current) => current.map((row) => (row.id === rowId ? { ...row, [field]: value } : row)));
   }
@@ -1362,15 +1388,71 @@ export function UniversalImportClient({
     setRuleDsl((current) => ({
       ...current,
       fileType,
-      mode: fileType === "excel" ? "mapping" : "text",
+      mode: fileType === "excel" ? "structured" : "text",
       mapping,
     }));
   }, [fileType, mapping]);
 
   useEffect(() => {
+    if (autoPreviewTimerRef.current) {
+      window.clearTimeout(autoPreviewTimerRef.current);
+      autoPreviewTimerRef.current = null;
+    }
+
+    if (!shouldAutoPreview()) {
+      return;
+    }
+
+    let cancelled = false;
+    autoPreviewTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        if (cancelled || autoPreviewBusyRef.current || !selectedFile) {
+          return;
+        }
+
+        try {
+          const editorRuleDsl = buildRuleDslFromEditor();
+          const signature = JSON.stringify({
+            fileName: selectedFile.name,
+            lastModified: selectedFile.lastModified,
+            fileType,
+            selectedRuleId,
+            mapping,
+            ruleDsl: editorRuleDsl,
+          });
+
+          if (signature === lastAutoPreviewSignatureRef.current) {
+            return;
+          }
+
+          autoPreviewBusyRef.current = true;
+          setStatus("检测到规则变更，正在自动试解析预览...");
+          await handleFileParse(selectedFile, fileType, mapping, editorRuleDsl);
+          lastAutoPreviewSignatureRef.current = signature;
+        } catch (error) {
+          setRuleStatus(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和 Transform Config。");
+        } finally {
+          autoPreviewBusyRef.current = false;
+        }
+      })();
+    }, 700);
+
+    return () => {
+      cancelled = true;
+      if (autoPreviewTimerRef.current) {
+        window.clearTimeout(autoPreviewTimerRef.current);
+        autoPreviewTimerRef.current = null;
+      }
+    };
+  }, [activeTab, aiConfidenceReport, aiSuggesting, fileType, headers.length, mapping, ruleDsl, selectedFile, selectedRuleId, transformConfigDrafts]);
+
+  useEffect(() => {
     return () => {
       if (toastTimerRef.current) {
         window.clearTimeout(toastTimerRef.current);
+      }
+      if (autoPreviewTimerRef.current) {
+        window.clearTimeout(autoPreviewTimerRef.current);
       }
     };
   }, []);
