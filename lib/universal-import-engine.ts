@@ -150,7 +150,10 @@ function isMetricLikeMatrixHeader(value: string) {
 }
 
 function cleanExtractedField(field: UniversalImportField, value: string) {
-  const normalized = value.replace(/\s+/g, " ").trim();
+  const normalized = value
+    .replace(/\s+/g, " ")
+    .replace(/\s+(?:收货电话|收货地址|收货人|电话|地址|门店|机构)[:：].*$/i, "")
+    .trim();
   if (!normalized) {
     return "";
   }
@@ -1011,7 +1014,11 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
       summaries.push(`rule:matrix_pivot:${section.title}`);
     }
 
-    if (hasEffectiveHeader && (!matrixTransform || Boolean(effectiveHeaderConfig?.emitWithMatrix))) {
+    const canEmitHeaderWithMatrix = !matrixTransform || Boolean(effectiveHeaderConfig?.emitWithMatrix);
+    const canEmitHeaderWithCard = !cardTransform || Boolean(effectiveHeaderConfig?.emitWithCard);
+    const canEmitHeaderWithText = !textTransform || Boolean(effectiveHeaderConfig?.emitWithText);
+
+    if (hasEffectiveHeader && canEmitHeaderWithMatrix && canEmitHeaderWithCard && canEmitHeaderWithText) {
       rows.push(...parseRowsByMapping(section, rule, effectiveHeaderConfig, tailValues, rows.length));
       summaries.push(`rule:header_mapping:${section.title}`);
     }
