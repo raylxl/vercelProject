@@ -43,9 +43,26 @@ type SidebarMenuItem = {
   children?: SidebarMenuItem[];
 };
 
-const TOP_NAV_ITEMS = ["AI考试", "20260507", "万能导入"] as const;
+const TOP_NAV_ITEMS = ["首页", "冷链财务管理", "AI考试", "系统管理"] as const;
 
 const SIDEBAR_MENUS: SidebarMenuItem[] = [
+  {
+    label: "首页",
+    children: [{ label: "工作台" }],
+  },
+  {
+    label: "冷链财务管理",
+    children: [
+      {
+        label: "基础数据",
+        children: [{ label: "费用类型维护" }],
+      },
+      {
+        label: "导入中心",
+        children: [{ label: "万能导入", page: "universal-import" }],
+      },
+    ],
+  },
   {
     label: "AI考试",
     children: [
@@ -54,6 +71,10 @@ const SIDEBAR_MENUS: SidebarMenuItem[] = [
         children: [{ label: "万能导入", page: "universal-import" }],
       },
     ],
+  },
+  {
+    label: "系统管理",
+    children: [{ label: "模板学习记录" }],
   },
 ];
 
@@ -112,10 +133,12 @@ export function FeeTypeManager({
   const [sidebarKeyword, setSidebarKeyword] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
+    "冷链财务管理",
+    "冷链财务管理/导入中心",
     "AI考试",
     "AI考试/20260507",
   ]);
-  const [activeMenuPath, setActiveMenuPath] = useState("AI考试/20260507/万能导入");
+  const [activeMenuPath, setActiveMenuPath] = useState("冷链财务管理/导入中心/万能导入");
   const [loginForm, setLoginForm] = useState({
     username: "",
     password: "",
@@ -353,13 +376,13 @@ export function FeeTypeManager({
         <div className="sidebar-brand">
           <div className="brand-logo">AI</div>
           <div className="brand-copy">
-            <strong>AI考试</strong>
-            <span>UNIVERSAL IMPORT</span>
+            <strong>冷链财务中台</strong>
+            <span>UNIVERSAL IMPORT CENTER</span>
           </div>
         </div>
 
         <div className="sidebar-org-switch">
-          <span>20260507</span>
+          <span>财务业务线</span>
           <button type="button" className="sidebar-org-button">
             切换
           </button>
@@ -381,7 +404,7 @@ export function FeeTypeManager({
         <div className="sidebar-env-card">
           <div>
             <strong>{initialOperatorName}</strong>
-            <span>当前系统仅保留万能导入菜单，点击即可进入。</span>
+            <span>当前入口页已接入完整后台菜单，登录后可直接进入万能导入。</span>
           </div>
           <span className="env-toggle active" />
         </div>
@@ -393,7 +416,7 @@ export function FeeTypeManager({
             {TOP_NAV_ITEMS.map((item, index) => (
               <button
                 type="button"
-                className={`global-nav-item${index === 2 ? " active" : ""}`}
+                className={`global-nav-item${item === "冷链财务管理" ? " active" : ""}`}
                 key={item}
               >
                 {item}
@@ -430,7 +453,7 @@ export function FeeTypeManager({
             <section className="workspace-card">
               <div className="workspace-header" style={{ marginBottom: 16 }}>
                 <div>
-                  <p className="workspace-breadcrumb">AI考试 / 20260507 / 万能导入</p>
+                  <p className="workspace-breadcrumb">冷链财务管理 / 导入中心 / 万能导入</p>
                   <h1>系统已切换到万能导入入口</h1>
                 </div>
               </div>

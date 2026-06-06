@@ -49,12 +49,12 @@ export async function GET(request: Request) {
       ? new Date(submittedDate.getTime() + 24 * 60 * 60 * 1000)
       : null;
 
-    const where: Prisma.UniversalImportRecordWhereInput = {
+    const where = {
       ...(externalCode
         ? {
             externalCode: {
               contains: externalCode,
-              mode: "insensitive",
+              mode: "insensitive" as const,
             },
           }
         : {}),
@@ -62,7 +62,7 @@ export async function GET(request: Request) {
         ? {
             receiverName: {
               contains: receiverName,
-              mode: "insensitive",
+              mode: "insensitive" as const,
             },
           }
         : {}),
@@ -72,26 +72,26 @@ export async function GET(request: Request) {
               {
                 externalCode: {
                   contains: query,
-                  mode: "insensitive",
+                  mode: "insensitive" as const,
                 },
               },
               {
                 receiverName: {
                   contains: query,
-                  mode: "insensitive",
+                  mode: "insensitive" as const,
                 },
               },
               {
-                receiverPhone: {
+                receiverStore: {
                   contains: query,
-                  mode: "insensitive",
+                  mode: "insensitive" as const,
                 },
               },
               {
                 batch: {
                   batchName: {
                     contains: query,
-                    mode: "insensitive",
+                    mode: "insensitive" as const,
                   },
                 },
               },
@@ -99,7 +99,7 @@ export async function GET(request: Request) {
                 batch: {
                   originalFileName: {
                     contains: query,
-                    mode: "insensitive",
+                    mode: "insensitive" as const,
                   },
                 },
               },
@@ -116,21 +116,26 @@ export async function GET(request: Request) {
         : {}),
     };
 
-    const total = await prisma.universalImportRecord.count({ where });
+    const total = await prisma.universalImportShipment.count({ where });
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const currentPage = Math.min(page, totalPages);
 
-    const records = await prisma.universalImportRecord.findMany({
+    const records = await prisma.universalImportShipment.findMany({
       where,
       include: {
         batch: true,
+        items: {
+          orderBy: {
+            sourceRowIndex: "asc",
+          },
+        },
       },
       orderBy: [
         {
           createdAt: "desc",
         },
         {
-          rowIndex: "asc",
+          externalCode: "asc",
         },
       ],
       skip: (currentPage - 1) * pageSize,
@@ -161,6 +166,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       batchName?: string;
       originalFileName?: string;
+      fileType?: string;
       sheetName?: string;
       headers?: unknown[];
       rows?: UniversalImportRow[];
@@ -169,10 +175,10 @@ export async function POST(request: Request) {
     };
 
     const rows = body.rows ?? [];
-    const existingRecords = await prisma.universalImportRecord.findMany({
+
+    const existingShipments = await prisma.universalImportShipment.findMany({
       select: {
         externalCode: true,
-        rowIndex: true,
         batch: {
           select: {
             batchName: true,
@@ -180,14 +186,10 @@ export async function POST(request: Request) {
           },
         },
       },
-      where: {
-        externalCode: { not: null },
-      },
     });
 
-    const existingExternalCodes = existingRecords.map((record) => ({
-      externalCode: record.externalCode ?? "",
-      rowIndex: record.rowIndex,
+    const existingExternalCodes = existingShipments.map((record) => ({
+      externalCode: record.externalCode,
       batchName: record.batch.batchName,
       batchCreatedAt: record.batch.createdAt.toISOString(),
     }));
@@ -207,38 +209,119 @@ export async function POST(request: Request) {
     const operatorName = await getOperatorNameFromSession();
     const batchName = body.batchName?.trim() || body.originalFileName?.trim() || "万能导入批次";
 
+    const shipmentMap = new Map<
+      string,
+      {
+        externalCode: string;
+        receiverStore: string | null;
+        receiverName: string | null;
+        receiverPhone: string | null;
+        receiverAddress: string | null;
+        note: string | null;
+        sourceRowCount: number;
+        rows: UniversalImportRow[];
+      }
+    >();
+
+    rows.forEach((row) => {
+      const externalCode = row.externalCode.trim();
+      const current = shipmentMap.get(externalCode);
+
+      if (current) {
+        current.rows.push(row);
+        current.sourceRowCount += 1;
+        if (!current.receiverStore && row.receiverStore.trim()) {
+          current.receiverStore = row.receiverStore.trim();
+        }
+        if (!current.receiverName && row.receiverName.trim()) {
+          current.receiverName = row.receiverName.trim();
+        }
+        if (!current.receiverPhone && row.receiverPhone.trim()) {
+          current.receiverPhone = row.receiverPhone.trim();
+        }
+        if (!current.receiverAddress && row.receiverAddress.trim()) {
+          current.receiverAddress = row.receiverAddress.trim();
+        }
+        if (!current.note && row.note.trim()) {
+          current.note = row.note.trim();
+        }
+        return;
+      }
+
+      shipmentMap.set(externalCode, {
+        externalCode,
+        receiverStore: row.receiverStore.trim() || null,
+        receiverName: row.receiverName.trim() || null,
+        receiverPhone: row.receiverPhone.trim() || null,
+        receiverAddress: row.receiverAddress.trim() || null,
+        note: row.note.trim() || null,
+        sourceRowCount: 1,
+        rows: [row],
+      });
+    });
+
+    const rule = body.fingerprint?.trim()
+      ? await prisma.universalImportRule.findUnique({
+          where: {
+            fingerprint: body.fingerprint.trim(),
+          },
+          select: {
+            id: true,
+            version: true,
+          },
+        })
+      : null;
+
     const result = await prisma.$transaction(async (tx) => {
       const batch = await tx.universalImportBatch.create({
         data: {
           batchName,
           originalFileName: body.originalFileName?.trim() || "",
-          sheetName: body.sheetName?.trim() || "",
+          sourceSheetName: body.sheetName?.trim() || "",
+          fileType: body.fileType?.trim() || "excel",
+          ruleId: rule?.id ?? null,
+          ruleVersion: rule?.version ?? null,
           totalRows: rows.length,
           successRows: rows.length,
           failedRows: 0,
           status: "COMPLETED",
+          parseSummary: {
+            headers: (body.headers ?? []).map((header) => String(header ?? "")),
+            fingerprint: body.fingerprint ?? "",
+            mapping: (body.mapping ?? {}) as Prisma.InputJsonValue,
+            shipmentCount: shipmentMap.size,
+          } as Prisma.InputJsonValue,
           createdBy: operatorName,
         },
       });
 
-      await tx.universalImportRecord.createMany({
-        data: rows.map((row) => ({
-          batchId: batch.id,
-          externalCode: row.externalCode.trim() || null,
-          senderName: row.senderName.trim(),
-          senderPhone: row.senderPhone.trim(),
-          senderAddress: row.senderAddress.trim(),
-          receiverName: row.receiverName.trim(),
-          receiverPhone: row.receiverPhone.trim(),
-          receiverAddress: row.receiverAddress.trim(),
-          weight: new Prisma.Decimal(row.weight.trim()),
-          pieces: Number.parseInt(row.pieces.trim(), 10),
-          temperature: row.temperature.trim(),
-          note: row.note.trim() || null,
-          rowIndex: row.rowIndex,
-          raw: row,
-        })),
-      });
+      for (const shipment of shipmentMap.values()) {
+        const createdShipment = await tx.universalImportShipment.create({
+          data: {
+            batchId: batch.id,
+            externalCode: shipment.externalCode,
+            receiverStore: shipment.receiverStore,
+            receiverName: shipment.receiverName,
+            receiverPhone: shipment.receiverPhone,
+            receiverAddress: shipment.receiverAddress,
+            note: shipment.note,
+            sourceRowCount: shipment.sourceRowCount,
+            raw: shipment.rows,
+          },
+        });
+
+        await tx.universalImportShipmentItem.createMany({
+          data: shipment.rows.map((row) => ({
+            shipmentId: createdShipment.id,
+            sourceRowIndex: row.rowIndex,
+            skuCode: row.skuCode.trim(),
+            skuName: row.skuName.trim(),
+            skuQuantity: Number.parseInt(row.skuQuantity.trim(), 10),
+            skuSpec: row.skuSpec.trim() || null,
+            raw: row,
+          })),
+        });
+      }
 
       return batch;
     });
@@ -248,6 +331,7 @@ export async function POST(request: Request) {
       summary: {
         successCount: rows.length,
         failCount: 0,
+        shipmentCount: shipmentMap.size,
       },
     });
   } catch (error) {

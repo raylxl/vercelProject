@@ -27,35 +27,20 @@ function buildSampleMeta(headers: unknown[]) {
   } as Prisma.InputJsonValue;
 }
 
-export async function GET(request: Request) {
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
+
+export async function GET(_request: Request, context: RouteContext) {
   try {
     const unauthorizedResponse = await ensureAuthenticated();
-
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }
 
-    const { searchParams } = new URL(request.url);
-    const fingerprint = searchParams.get("fingerprint")?.trim() ?? "";
-
-    if (!fingerprint) {
-      const templates = await prisma.universalImportRule.findMany({
-        orderBy: { updatedAt: "desc" },
-        take: 50,
-        include: {
-          _count: {
-            select: {
-              batches: true,
-            },
-          },
-        },
-      });
-
-      return NextResponse.json({ templates });
-    }
-
+    const { id } = await context.params;
     const template = await prisma.universalImportRule.findUnique({
-      where: { fingerprint },
+      where: { id },
       include: {
         _count: {
           select: {
@@ -65,21 +50,25 @@ export async function GET(request: Request) {
       },
     });
 
+    if (!template) {
+      return NextResponse.json({ error: "规则不存在。" }, { status: 404 });
+    }
+
     return NextResponse.json({ template });
   } catch (error) {
-    console.error("GET /api/universal-import/templates failed", error);
+    console.error("GET /api/universal-import/templates/[id] failed", error);
     return NextResponse.json({ error: "查询规则失败，请稍后重试。" }, { status: 500 });
   }
 }
 
-export async function POST(request: Request) {
+export async function PUT(request: Request, context: RouteContext) {
   try {
     const unauthorizedResponse = await ensureAuthenticated();
-
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }
 
+    const { id } = await context.params;
     const body = (await request.json()) as {
       ruleName?: string;
       sheetName?: string;
@@ -92,34 +81,35 @@ export async function POST(request: Request) {
 
     const headers = body.headers ?? [];
     const fingerprint = buildTemplateFingerprint(body.sheetName ?? "Sheet1", headers);
-    const inferredMapping = inferMappingFromHeaders(headers);
     const operatorName = await getOperatorNameFromSession();
+    const inferredMapping = inferMappingFromHeaders(headers);
     const fileType = (body.fileType?.trim() || "excel") as SupportedImportFileType;
     const mapping = body.mapping ?? inferredMapping;
     const ruleDsl = body.ruleDsl ?? (createDefaultRuleDsl(mapping, fileType) as Prisma.InputJsonValue);
-    const sampleMeta = buildSampleMeta(headers);
 
-    const template = await prisma.universalImportRule.upsert({
-      where: { fingerprint },
-      create: {
+    const existing = await prisma.universalImportRule.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return NextResponse.json({ error: "规则不存在。" }, { status: 404 });
+    }
+
+    const template = await prisma.universalImportRule.update({
+      where: { id },
+      data: {
         fingerprint,
         ruleName: body.ruleName?.trim() || body.sheetName?.trim() || "导入规则",
         fileType,
         status: body.status?.trim() || "ACTIVE",
         mapping,
         ruleDsl,
-        sampleMeta,
-        createdBy: operatorName,
+        sampleMeta: buildSampleMeta(headers),
         updatedBy: operatorName,
-      },
-      update: {
-        ruleName: body.ruleName?.trim() || body.sheetName?.trim() || "导入规则",
-        fileType,
-        status: body.status?.trim() || "ACTIVE",
-        mapping,
-        ruleDsl,
-        sampleMeta,
-        updatedBy: operatorName,
+        version: {
+          increment: 1,
+        },
       },
       include: {
         _count: {
@@ -132,7 +122,37 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ template });
   } catch (error) {
-    console.error("POST /api/universal-import/templates failed", error);
-    return NextResponse.json({ error: "保存规则失败，请稍后重试。" }, { status: 500 });
+    console.error("PUT /api/universal-import/templates/[id] failed", error);
+    return NextResponse.json({ error: "更新规则失败，请稍后重试。" }, { status: 500 });
+  }
+}
+
+export async function DELETE(_request: Request, context: RouteContext) {
+  try {
+    const unauthorizedResponse = await ensureAuthenticated();
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
+
+    const { id } = await context.params;
+    const batchCount = await prisma.universalImportBatch.count({
+      where: { ruleId: id },
+    });
+
+    if (batchCount > 0) {
+      return NextResponse.json(
+        { error: "该规则已被导入批次引用，暂不允许删除。" },
+        { status: 400 },
+      );
+    }
+
+    await prisma.universalImportRule.delete({
+      where: { id },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("DELETE /api/universal-import/templates/[id] failed", error);
+    return NextResponse.json({ error: "删除规则失败，请稍后重试。" }, { status: 500 });
   }
 }
