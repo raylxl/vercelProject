@@ -29,6 +29,7 @@ type AiRuleSuggestion = {
   mode?: UniversalImportRuleDsl["mode"];
   mapping?: Partial<Record<UniversalImportField, number | null>>;
   enabledTransforms?: string[];
+  transformConfigs?: Record<string, Record<string, unknown>>;
   confidenceReport?: AiConfidenceItem[];
   riskNotes?: string[];
 };
@@ -86,6 +87,12 @@ const RESPONSE_SCHEMA = {
       type: "array",
       items: { type: "string" },
     },
+    transformConfigs: {
+      type: "object",
+      additionalProperties: {
+        type: "object",
+      },
+    },
     confidenceReport: {
       type: "array",
       items: {
@@ -111,7 +118,7 @@ const RESPONSE_SCHEMA = {
       items: { type: "string" },
     },
   },
-  required: ["summary", "mode", "mapping", "enabledTransforms", "confidenceReport", "riskNotes"],
+  required: ["summary", "mode", "mapping", "enabledTransforms", "transformConfigs", "confidenceReport", "riskNotes"],
 } as const;
 
 async function ensureAuthenticated() {
@@ -186,12 +193,29 @@ function mergeTransforms(baseRule: UniversalImportRuleDsl, enabledTransforms: st
   };
 }
 
+function mergeTransformConfigs(baseRule: UniversalImportRuleDsl, configs: Record<string, Record<string, unknown>> | undefined) {
+  if (!configs) {
+    return baseRule;
+  }
+
+  return {
+    ...baseRule,
+    transforms: baseRule.transforms.map((transform) => ({
+      ...transform,
+      config: {
+        ...(transform.config ?? {}),
+        ...(configs[transform.type] ?? {}),
+      },
+    })),
+  };
+}
+
 function summarizeDocumentStructure(document: Awaited<ReturnType<typeof parseImportDocument>>) {
   const firstSection = document.sections[0];
   const headRows = firstSection?.rows.slice(0, 8) ?? [];
   const tailRows = firstSection?.rows.slice(-8) ?? [];
   const detailRows = firstSection?.rows
-    .filter((row) => row.some((cell) => /ZBWP|SKU|物品编码|商品编码/i.test(cell)))
+    .filter((row) => row.filter(Boolean).length >= 3)
     .slice(0, 12) ?? [];
 
   return {
@@ -244,6 +268,12 @@ function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, 
         "confidenceReport 要逐字段返回 0 到 1 的置信度",
         "enabledTransforms 只返回需要启用的 transform type",
         "enabledTransforms 只能从给定的 availableTransforms 中选择",
+        "transformConfigs 必须把每个启用 transform 的执行参数写清楚，执行器只解释这些配置，不会按文件名或样例类型自动适配",
+        "header_mapping.config 可包含 headerRowIndex、dataStartRowIndex、dataEndRowIndex、fieldColumns、requiredRowFields、skipRowRegex",
+        "tail_text_extract.config 可包含 fieldRegex 或 keyValueLabels，用来从尾部/全文提取收货信息、外部编码等",
+        "matrix_pivot.config 可包含 headerRowIndex、dataStartRowIndex、rowFieldColumns、matrixStartColumn、matrixEndColumn、excludeHeaderRegex、externalCodeTemplate",
+        "card_split.config 可包含 startRegex、itemHeaderRegex、fieldRegex、itemColumns",
+        "text_record_split.config 可包含 recordSeparatorRegex、fieldRegex、item.regex 及 skuCodeGroup、skuNameGroup、skuSpecGroup、skuQuantityGroup",
         "如果文档是 PDF 或弱结构文本，请重点说明哪些字段需要通过尾部文本、分段或卡片拆分提取",
         "如果结构摘要里已经出现收货人、收货电话、收货地址、收货门店等键值，请优先依据这些信息给出风险说明",
         "如果明细行中 SKU 编码、名称、规格、单位、数量出现在同一行，请给出更明确的结构化建议",
@@ -282,14 +312,14 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
   const mapping = normalizeMapping(parsed.mapping, inferredMapping);
   const baseRule = createDefaultRuleDsl(mapping, fileType);
   const mode = parsed.mode ?? baseRule.mode;
-  const suggestedRule = mergeTransforms(
+  const suggestedRule = mergeTransformConfigs(mergeTransforms(
     {
       ...baseRule,
       mode,
       mapping,
     },
     parsed.enabledTransforms,
-  );
+  ), parsed.transformConfigs);
 
   return {
     suggestedRule,

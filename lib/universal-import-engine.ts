@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   createEmptyRow,
   formatIssueLabel,
+  type UniversalImportField,
   type UniversalImportMapping,
   type UniversalImportRow,
   validateImportRows,
@@ -42,7 +43,7 @@ export type UniversalImportRuleDsl = {
   transforms: Array<{
     type: RuleTransformType;
     enabled: boolean;
-    config?: Record<string, string | number | boolean | string[]>;
+    config?: Record<string, unknown>;
   }>;
   mapping: UniversalImportMapping;
 };
@@ -56,16 +57,6 @@ export type RuleExecutionResult = {
   summary: string[];
 };
 
-type RuleScenario =
-  | "haikou_delivery"
-  | "hunan_summary"
-  | "multi_sheet_store"
-  | "store_matrix"
-  | "card_transfer"
-  | "pdf_delivery"
-  | "generic_table"
-  | "generic_text";
-
 type PdfParseTextResult = {
   text?: string;
 };
@@ -75,33 +66,41 @@ type PdfParseClass = new (options: { data: Buffer }) => {
   destroy?: () => Promise<void> | void;
 };
 
-const HEADER_KEYWORDS = [
-  "序号",
-  "物品编码",
-  "物品名称",
-  "规格型号",
-  "发货数量",
-  "出库数量",
-  "收货机构",
-  "配送汇总单号",
-  "配送单号",
-  "SKU名称",
-  "SKU条码",
-  "外部商品编码",
-  "仓库名称",
-];
+type FieldRegexConfig = Partial<Record<UniversalImportField, string>>;
+
+type TextItemConfig = {
+  regex?: string;
+  skuCodeGroup?: number;
+  skuNameGroup?: number;
+  skuSpecGroup?: number;
+  skuQuantityGroup?: number;
+};
+
+type MatrixPivotConfig = {
+  headerRowIndex?: number;
+  dataStartRowIndex?: number;
+  rowFieldColumns?: Partial<Record<UniversalImportField, number>>;
+  matrixStartColumn?: number;
+  matrixEndColumn?: number;
+  excludeHeaderRegex?: string;
+  externalCodeTemplate?: string;
+};
+
+type CardSplitConfig = {
+  startRegex?: string;
+  itemHeaderRegex?: string;
+  fieldRegex?: FieldRegexConfig;
+  itemColumns?: Partial<Record<UniversalImportField, number>>;
+};
+
+type TextRecordSplitConfig = {
+  recordSeparatorRegex?: string;
+  fieldRegex?: FieldRegexConfig;
+  item?: TextItemConfig;
+};
 
 function normalizeCell(value: unknown) {
   return String(value ?? "").trim();
-}
-
-async function loadPdfParseModule() {
-  ensurePdfRuntimePolyfills();
-
-  return (await import("pdf-parse")) as unknown as {
-    PDFParse?: PdfParseClass;
-    default?: (buffer: Buffer) => Promise<PdfParseTextResult>;
-  };
 }
 
 function isNonEmptyRow(row: unknown[]) {
@@ -119,96 +118,96 @@ function normalizeRows(rows: unknown[][]) {
   return rows.filter(isNonEmptyRow).map((row) => row.map((cell) => normalizeCell(cell)));
 }
 
-function ensureUniqueExternalCode(prefix: string, index: number) {
-  return `${prefix}-${String(index + 1).padStart(3, "0")}`;
-}
-
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function findBestHeaderRow(rows: string[][]) {
-  let bestIndex = -1;
-  let bestScore = -1;
-
-  rows.forEach((row, index) => {
-    const score = row.reduce((total, cell) => {
-      if (!cell) {
-        return total;
-      }
-
-      return total + (HEADER_KEYWORDS.some((keyword) => cell.includes(keyword)) ? 1 : 0);
-    }, 0);
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestIndex = index;
-    }
-  });
-
-  if (bestScore > 0 && bestIndex >= 0) {
-    return bestIndex;
-  }
-
-  return rows.findIndex((row) => row.length >= 3);
+function ensureUniqueExternalCode(prefix: string, index: number) {
+  return `${prefix}-${String(index + 1).padStart(3, "0")}`;
 }
 
-function findHeaderIndex(rows: string[][], matcher: (row: string[]) => boolean) {
-  return rows.findIndex((row) => matcher(row));
-}
-
-function findColumnIndex(header: string[], patterns: RegExp[]) {
-  return header.findIndex((cell) => patterns.some((pattern) => pattern.test(cell)));
-}
-
-function firstNonEmpty(...values: Array<string | undefined>) {
-  return values.find((value) => normalizeCell(value)) ?? "";
-}
-
-function findValueAfterLabel(rows: string[][], label: string) {
-  for (const row of rows) {
-    for (let index = 0; index < row.length; index += 1) {
-      if (normalizeCell(row[index]) === label) {
-        const nextValue = normalizeCell(row[index + 1]);
-        if (nextValue) {
-          return nextValue;
-        }
-      }
-    }
-  }
-
-  return "";
-}
-
-function extractValueFromText(text: string, label: string, stopLabels: string[] = []) {
-  const escapedLabel = escapeRegExp(label);
-  const stopPattern = stopLabels.length
-    ? `(?=\\s*(?:${stopLabels.map((item) => escapeRegExp(item)).join("|")})\\s*[：:])`
-    : "(?=$)";
-  const pattern = new RegExp(`${escapedLabel}\\s*[：:]?\\s*([\\s\\S]*?)${stopPattern}`, "m");
-  const match = text.match(pattern);
-  return match?.[1]?.replace(/\s+/g, " ").trim() ?? "";
-}
-
-function extractCodeByTitle(title: string, keyword: string) {
-  const match = title.match(new RegExp(`${escapeRegExp(keyword)}([A-Z0-9-]+)`));
-  return match?.[1]?.trim() ?? "";
-}
-
-function cleanStoreName(value: string) {
-  return value.replace(/出库单$/, "").trim();
+function toExternalCodePart(value: string) {
+  return value.replace(/\s+/g, "").replace(/[\\/:*?"<>|]+/g, "").slice(0, 40) || "AUTO";
 }
 
 function isPositiveQuantity(value: string) {
   return /^\d+(?:\.\d+)?$/.test(value.trim()) && Number(value) > 0;
 }
 
-function toCompactCodePart(value: string) {
-  return value.replace(/[^\dA-Za-z]+/g, "").slice(0, 20) || "AUTO";
+function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): UniversalImportRow {
+  return {
+    ...createEmptyRow(rowIndex),
+    ...values,
+    rowIndex,
+  };
 }
 
-function toExternalCodePart(value: string) {
-  return value.replace(/\s+/g, "").replace(/[\\/:*?"<>|]+/g, "").slice(0, 40) || "AUTO";
+function asNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function asString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asStringArray(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item)) : [];
+}
+
+function getTransform(rule: UniversalImportRuleDsl, type: RuleTransformType) {
+  return rule.transforms.find((transform) => transform.type === type && transform.enabled);
+}
+
+function getFieldColumns(config: Record<string, unknown> | undefined, rule: UniversalImportRuleDsl) {
+  const configured = config?.fieldColumns;
+  if (configured && typeof configured === "object" && !Array.isArray(configured)) {
+    return configured as Partial<Record<UniversalImportField, number>>;
+  }
+
+  return rule.mapping;
+}
+
+function getColumnValue(row: string[], column: unknown) {
+  return typeof column === "number" && column >= 0 ? row[column] ?? "" : "";
+}
+
+function createRegex(pattern: string | undefined, flags = "i") {
+  if (!pattern) {
+    return null;
+  }
+
+  try {
+    return new RegExp(pattern, flags);
+  } catch {
+    return null;
+  }
+}
+
+function extractTextField(text: string, pattern: string | undefined) {
+  const regex = createRegex(pattern, "im");
+  if (!regex) {
+    return "";
+  }
+
+  const match = text.match(regex);
+  return match?.[1]?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function interpolate(template: string | undefined, values: Record<string, string>) {
+  if (!template) {
+    return "";
+  }
+
+  return template.replace(/\{(\w+)\}/g, (_token, key: string) => values[key] ?? "");
+}
+
+async function loadPdfParseModule() {
+  ensurePdfRuntimePolyfills();
+
+  return (await import("pdf-parse")) as unknown as {
+    PDFParse?: PdfParseClass;
+    default?: (buffer: Buffer) => Promise<PdfParseTextResult>;
+  };
 }
 
 async function parseExcelDocument(fileBuffer: Buffer, originalFileName: string): Promise<ParsedDocument> {
@@ -236,14 +235,13 @@ async function parseExcelDocument(fileBuffer: Buffer, originalFileName: string):
   });
 
   const firstSection = sections[0];
-  const headerIndex = firstSection ? findBestHeaderRow(firstSection.rows) : -1;
-  const headers = headerIndex >= 0 ? firstSection?.rows[headerIndex] ?? [] : [];
+  const headers = firstSection?.rows[asNumber(undefined, 0)] ?? [];
 
   return {
     fileType: "excel",
     sheetName: workbook.SheetNames[0] ?? originalFileName ?? "Sheet1",
     headers,
-    rawRows: headerIndex >= 0 ? firstSection?.rows.slice(headerIndex + 1) ?? [] : firstSection?.rows ?? [],
+    rawRows: firstSection?.rows.slice(1) ?? [],
     textContent: sections.map((section) => section.text).join("\n\n"),
     sections,
   };
@@ -253,12 +251,11 @@ async function parseWordDocument(fileBuffer: Buffer, originalFileName: string): 
   const result = await mammoth.extractRawText({ buffer: fileBuffer });
   const text = result.value ?? "";
   const rows = splitLines(text).map((line) => line.split(/[|\t]/).map((cell) => cell.trim()).filter(Boolean));
-  const headers = rows[0] ?? [];
 
   return {
     fileType: "word",
     sheetName: originalFileName || "Word Document",
-    headers,
+    headers: rows[0] ?? [],
     rawRows: rows.slice(1),
     textContent: text,
     sections: [
@@ -336,177 +333,213 @@ export async function parseImportDocument(options: {
   return parseExcelDocument(options.fileBuffer, options.originalFileName);
 }
 
-function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): UniversalImportRow {
-  return {
-    ...createEmptyRow(rowIndex),
-    ...values,
-    rowIndex,
-  };
-}
-
-function parseHaikouDelivery(document: ParsedDocument) {
-  const rows = document.sections[0]?.rows ?? [];
-  const headerIndex = findHeaderIndex(rows, (row) => row.includes("物品编码") && row.includes("物品名称") && row.includes("发货数量"));
-  if (headerIndex < 0) {
-    return [];
+function findConfiguredHeaderIndex(rows: string[][], config: Record<string, unknown> | undefined) {
+  const explicit = config?.headerRowIndex;
+  if (typeof explicit === "number" && explicit >= 0) {
+    return explicit;
   }
 
-  const header = rows[headerIndex];
-  const codeIndex = findColumnIndex(header, [/物品编码/]);
-  const nameIndex = findColumnIndex(header, [/物品名称/]);
-  const specIndex = findColumnIndex(header, [/规格型号/]);
-  const quantityIndex = findColumnIndex(header, [/发货数量/]);
-  const dataRows = rows
-    .slice(headerIndex + 1)
-    .filter((row) => /^\d+$/.test(row[0] ?? "") && isPositiveQuantity(row[quantityIndex] ?? ""));
+  const requiredHeaders = asStringArray(config?.requiredHeaders);
+  if (requiredHeaders.length > 0) {
+    const required = requiredHeaders.map((item) => item.toLowerCase());
+    const index = rows.findIndex((row) => {
+      const joined = row.join(" ").toLowerCase();
+      return required.every((item) => joined.includes(item.toLowerCase()));
+    });
 
-  const title = rows[0]?.[0] ?? "";
-  const externalCode =
-    firstNonEmpty(
-      findValueAfterLabel(rows, "单据号"),
-      extractCodeByTitle(title, "配送发货单"),
-      ensureUniqueExternalCode("HK", 0),
-    );
-  const receiverStore = findValueAfterLabel(rows, "收货机构");
-  const receiverName = findValueAfterLabel(rows, "收货人");
-  const receiverPhone = findValueAfterLabel(rows, "收货电话");
-  const receiverAddress = findValueAfterLabel(rows, "收货地址");
-
-  return dataRows.map((row, index) =>
-    rowFromValues(
-      {
-        externalCode,
-        receiverStore,
-        receiverName,
-        receiverPhone,
-        receiverAddress,
-        skuCode: row[codeIndex] ?? "",
-        skuName: row[nameIndex] ?? "",
-        skuSpec: specIndex >= 0 ? row[specIndex] ?? "" : "",
-        skuQuantity: quantityIndex >= 0 ? row[quantityIndex] ?? "" : "",
-      },
-      index + 1,
-    ),
-  );
-}
-
-function parseHunanSummary(document: ParsedDocument) {
-  const rows = document.sections[0]?.rows ?? [];
-  const headerIndex = findHeaderIndex(rows, (row) => row.includes("配送汇总单号*") && row.includes("物品编码*"));
-  if (headerIndex < 0) {
-    return [];
+    if (index >= 0) {
+      return index;
+    }
   }
 
-  const header = rows[headerIndex];
-  const storeIndex = findColumnIndex(header, [/收货机构/]);
-  const summaryCodeIndex = findColumnIndex(header, [/配送汇总单号/]);
-  const deliveryCodeIndex = findColumnIndex(header, [/配送单号/]);
-  const codeIndex = findColumnIndex(header, [/物品编码/]);
-  const nameIndex = findColumnIndex(header, [/物品名称/]);
-  const specIndex = findColumnIndex(header, [/规格型号/]);
-  const quantityIndex = findColumnIndex(header, [/发货数量/]);
-  const receiverNameIndex = findColumnIndex(header, [/收货人/]);
-  const receiverPhoneIndex = findColumnIndex(header, [/收货电话/]);
-  const receiverAddressIndex = findColumnIndex(header, [/收货地址/]);
-
-  return rows
-    .slice(headerIndex + 1)
-    .filter((row) => {
-      const skuCode = row[codeIndex] ?? "";
-      const skuName = row[nameIndex] ?? "";
-      const quantity = row[quantityIndex] ?? "";
-      return Boolean(skuCode && skuName && isPositiveQuantity(quantity));
-    })
-    .map((row, index) =>
-      rowFromValues(
-        {
-          externalCode:
-            firstNonEmpty(row[summaryCodeIndex], row[deliveryCodeIndex], ensureUniqueExternalCode("HN", index)),
-          receiverStore: row[storeIndex] ?? "",
-          receiverName: receiverNameIndex >= 0 ? row[receiverNameIndex] ?? "" : "",
-          receiverPhone: receiverPhoneIndex >= 0 ? row[receiverPhoneIndex] ?? "" : "",
-          receiverAddress: receiverAddressIndex >= 0 ? row[receiverAddressIndex] ?? "" : "",
-          skuCode: row[codeIndex] ?? "",
-          skuName: row[nameIndex] ?? "",
-          skuSpec: specIndex >= 0 ? row[specIndex] ?? "" : "",
-          skuQuantity: row[quantityIndex] ?? "",
-          note: deliveryCodeIndex >= 0 ? row[deliveryCodeIndex] ?? "" : "",
-        },
-        index + 1,
-      ),
-    );
+  return 0;
 }
 
-function parseMultiSheetStore(document: ParsedDocument) {
+function extractTailFields(section: ParsedDocument["sections"][number], config: Record<string, unknown> | undefined) {
+  const fieldRegex = (config?.fieldRegex ?? {}) as FieldRegexConfig;
+  const output: Partial<Record<UniversalImportField, string>> = {};
+  const text = section.text;
+
+  (Object.keys(fieldRegex) as UniversalImportField[]).forEach((field) => {
+    output[field] = extractTextField(text, fieldRegex[field]);
+  });
+
+  const keyValueLabels = config?.keyValueLabels;
+  if (keyValueLabels && typeof keyValueLabels === "object" && !Array.isArray(keyValueLabels)) {
+    const labels = keyValueLabels as Partial<Record<UniversalImportField, string[]>>;
+    section.rows.forEach((row) => {
+      row.forEach((cell, index) => {
+        (Object.keys(labels) as UniversalImportField[]).forEach((field) => {
+          const candidates = labels[field] ?? [];
+          if (!output[field] && candidates.some((label) => normalizeCell(cell) === label)) {
+            output[field] = normalizeCell(row[index + 1]);
+          }
+        });
+      });
+    });
+  }
+
+  return output;
+}
+
+function parseRowsByMapping(
+  section: ParsedDocument["sections"][number],
+  rule: UniversalImportRuleDsl,
+  config: Record<string, unknown> | undefined,
+  baseValues: Partial<Record<UniversalImportField, string>>,
+  rowOffset: number,
+) {
+  const rows = section.rows;
+  const headerIndex = findConfiguredHeaderIndex(rows, config);
+  const dataStartRowIndex = asNumber(config?.dataStartRowIndex, headerIndex + 1);
+  const dataEndRowIndex = asNumber(config?.dataEndRowIndex, rows.length);
+  const columns = getFieldColumns(config, rule);
+  const skipRowRegex = createRegex(asString(config?.skipRowRegex), "i");
+  const requiredFields = asStringArray(config?.requiredRowFields) as UniversalImportField[];
   const output: UniversalImportRow[] = [];
 
-  document.sections.forEach((section, sectionIndex) => {
-    const title = section.rows[0]?.[0] ?? section.title;
-    const metadata = section.rows[1]?.join(" ") ?? "";
-    const storeName = cleanStoreName(title);
-    const dateMatch = metadata.match(/出库日期[:：]\s*([\d/-]+)/);
-    const externalCode = `MS-${dateMatch?.[1]?.replace(/[^\d]/g, "") || sectionIndex + 1}-${toExternalCodePart(storeName)}`;
-    const headerIndex = findHeaderIndex(
-      section.rows,
-      (row) => row.includes("物品编码") && row.includes("物品名称") && row.includes("出库数量"),
-    );
-
-    if (headerIndex < 0) {
+  rows.slice(dataStartRowIndex, dataEndRowIndex).forEach((sourceRow) => {
+    const joined = sourceRow.join(" ");
+    if (!joined.trim() || skipRowRegex?.test(joined)) {
       return;
     }
 
-    const header = section.rows[headerIndex];
-    const codeIndex = findColumnIndex(header, [/物品编码/]);
-    const nameIndex = findColumnIndex(header, [/物品名称/]);
-    const specIndex = findColumnIndex(header, [/规格型号/]);
-    const quantityIndex = findColumnIndex(header, [/出库数量|发货数量/]);
-    const noteIndex = findColumnIndex(header, [/备注/]);
+    const values: Partial<Record<UniversalImportField, string>> = { ...baseValues };
+    (Object.keys(columns) as UniversalImportField[]).forEach((field) => {
+      const value = getColumnValue(sourceRow, columns[field]);
+      if (value) {
+        values[field] = value;
+      }
+    });
 
-    section.rows
-      .slice(headerIndex + 1)
-      .filter((row) => /^\d+$/.test(row[0] ?? "") && row[codeIndex] && row[nameIndex] && isPositiveQuantity(row[quantityIndex] ?? ""))
-      .forEach((row) => {
-        output.push(
-          rowFromValues(
-            {
-              externalCode,
-              receiverStore: storeName,
-              skuCode: row[codeIndex] ?? "",
-              skuName: row[nameIndex] ?? "",
-              skuSpec: specIndex >= 0 ? row[specIndex] ?? "" : "",
-              skuQuantity: row[quantityIndex] ?? "",
-              note: noteIndex >= 0 ? row[noteIndex] ?? "" : "",
-            },
-            output.length + 1,
-          ),
-        );
-      });
+    const hasRequiredValues = requiredFields.length
+      ? requiredFields.every((field) => normalizeCell(values[field]))
+      : Boolean(values.skuCode || values.skuName || values.skuQuantity);
+
+    if (!hasRequiredValues) {
+      return;
+    }
+
+    output.push(rowFromValues(values, rowOffset + output.length + 1));
   });
 
   return output;
 }
 
-function parseStoreMatrix(document: ParsedDocument) {
-  const rows = document.sections[0]?.rows ?? [];
-  const headerRow = rows.find((row) => row.includes("仓库名称") && row.includes("SKU名称") && row.includes("外部商品编码")) ?? [];
-  if (headerRow.length === 0) {
+function parseMatrix(section: ParsedDocument["sections"][number], config: MatrixPivotConfig, rowOffset: number) {
+  const rows = section.rows;
+  const headerRowIndex = asNumber(config.headerRowIndex, 0);
+  const header = rows[headerRowIndex] ?? [];
+  const dataStart = asNumber(config.dataStartRowIndex, headerRowIndex + 1);
+  const matrixStart = asNumber(config.matrixStartColumn, 0);
+  const matrixEnd = asNumber(config.matrixEndColumn, header.length - 1);
+  const rowColumns = config.rowFieldColumns ?? {};
+  const excludeRegex = createRegex(config.excludeHeaderRegex, "i");
+  const output: UniversalImportRow[] = [];
+
+  rows.slice(dataStart).forEach((sourceRow) => {
+    const baseValues: Partial<Record<UniversalImportField, string>> = {};
+    (Object.keys(rowColumns) as UniversalImportField[]).forEach((field) => {
+      baseValues[field] = getColumnValue(sourceRow, rowColumns[field]);
+    });
+
+    for (let columnIndex = matrixStart; columnIndex <= matrixEnd; columnIndex += 1) {
+      const receiverStore = normalizeCell(header[columnIndex]);
+      const quantity = normalizeCell(sourceRow[columnIndex]);
+      if (!receiverStore || excludeRegex?.test(receiverStore) || !isPositiveQuantity(quantity)) {
+        continue;
+      }
+
+      output.push(
+        rowFromValues(
+          {
+            ...baseValues,
+            externalCode:
+              interpolate(config.externalCodeTemplate, { receiverStore, columnIndex: String(columnIndex) }) ||
+              `MATRIX-${toExternalCodePart(receiverStore)}`,
+            receiverStore,
+            skuQuantity: quantity,
+          },
+          rowOffset + output.length + 1,
+        ),
+      );
+    }
+  });
+
+  return output;
+}
+
+function parseTextItems(text: string, itemConfig: TextItemConfig | undefined, baseValues: Partial<Record<UniversalImportField, string>>, rowOffset: number) {
+  const regex = createRegex(itemConfig?.regex, "gim");
+  if (!regex) {
     return [];
   }
 
-  const storeColumns = headerRow
-    .map((cell, index) => ({ cell, index }))
-    .filter(
-      ({ cell, index }) =>
-        index >= 13 &&
-        Boolean(cell) &&
-        !/总和|结余|库存|冻结|分配|待移入/.test(String(cell)),
-    );
-  const dataRows = rows.slice(rows.indexOf(headerRow) + 1).filter((row) => row[4] && row[2]);
   const output: UniversalImportRow[] = [];
+  let match: RegExpExecArray | null;
 
-  dataRows.forEach((row) => {
-    storeColumns.forEach(({ cell, index }) => {
-      const quantity = normalizeCell(row[index]);
+  while ((match = regex.exec(text)) !== null) {
+    output.push(
+      rowFromValues(
+        {
+          ...baseValues,
+          skuCode: match[asNumber(itemConfig?.skuCodeGroup, 1)] ?? "",
+          skuName: match[asNumber(itemConfig?.skuNameGroup, 2)] ?? "",
+          skuSpec: match[asNumber(itemConfig?.skuSpecGroup, 3)] ?? "",
+          skuQuantity: match[asNumber(itemConfig?.skuQuantityGroup, 4)] ?? "",
+        },
+        rowOffset + output.length + 1,
+      ),
+    );
+  }
+
+  return output;
+}
+
+function parseCards(section: ParsedDocument["sections"][number], config: CardSplitConfig, rowOffset: number) {
+  const startRegex = createRegex(config.startRegex, "i");
+  if (!startRegex) {
+    return [];
+  }
+
+  const cards: string[][][] = [];
+  let current: string[][] = [];
+  section.rows.forEach((row) => {
+    if (startRegex.test(row.join(" "))) {
+      if (current.length > 0) {
+        cards.push(current);
+      }
+      current = [row];
+      return;
+    }
+    current.push(row);
+  });
+  if (current.length > 0) {
+    cards.push(current);
+  }
+
+  const output: UniversalImportRow[] = [];
+  const itemHeaderRegex = createRegex(config.itemHeaderRegex, "i");
+
+  cards.forEach((card, cardIndex) => {
+    const text = card.map((row) => row.join(" | ")).join("\n");
+    const baseValues: Partial<Record<UniversalImportField, string>> = {
+      externalCode: ensureUniqueExternalCode("CARD", cardIndex),
+    };
+
+    (Object.keys(config.fieldRegex ?? {}) as UniversalImportField[]).forEach((field) => {
+      baseValues[field] = extractTextField(text, config.fieldRegex?.[field]);
+    });
+
+    const itemHeaderIndex = itemHeaderRegex ? card.findIndex((row) => itemHeaderRegex.test(row.join(" "))) : -1;
+    const itemColumns = config.itemColumns ?? {};
+
+    if (itemHeaderIndex < 0) {
+      return;
+    }
+
+    card.slice(itemHeaderIndex + 1).forEach((itemRow) => {
+      const quantity = getColumnValue(itemRow, itemColumns.skuQuantity);
       if (!isPositiveQuantity(quantity)) {
         return;
       }
@@ -514,14 +547,13 @@ function parseStoreMatrix(document: ParsedDocument) {
       output.push(
         rowFromValues(
           {
-            externalCode: `MATRIX-${toExternalCodePart(String(cell))}`,
-            receiverStore: String(cell),
-            skuCode: row[4] ?? "",
-            skuName: row[2] ?? "",
-            skuSpec: row[7] ?? "",
+            ...baseValues,
+            skuCode: getColumnValue(itemRow, itemColumns.skuCode),
+            skuName: getColumnValue(itemRow, itemColumns.skuName),
+            skuSpec: getColumnValue(itemRow, itemColumns.skuSpec),
             skuQuantity: quantity,
           },
-          output.length + 1,
+          rowOffset + output.length + 1,
         ),
       );
     });
@@ -530,369 +562,103 @@ function parseStoreMatrix(document: ParsedDocument) {
   return output;
 }
 
-function parseCardTransfer(document: ParsedDocument) {
-  const rows = document.sections[0]?.rows ?? [];
+function parseTextRecords(document: ParsedDocument, config: TextRecordSplitConfig, rowOffset: number) {
+  const separator = createRegex(config.recordSeparatorRegex, "im");
+  const chunks = separator ? document.textContent.split(separator).filter((chunk) => chunk.trim()) : [document.textContent];
   const output: UniversalImportRow[] = [];
-  let currentExternalCode = "";
-  let receiverStore = "";
-  let receiverName = "";
-  let receiverPhone = "";
-  let receiverAddress = "";
-  let cardIndex = 0;
-  let inItems = false;
 
-  rows.forEach((row) => {
-    const firstCell = row[0] ?? "";
-
-    if (/调拨记录\s*#\d+/.test(firstCell)) {
-      cardIndex += 1;
-      currentExternalCode = ensureUniqueExternalCode("DB", cardIndex - 1);
-      inItems = false;
-      return;
-    }
-
-    if (firstCell === "调入门店") {
-      receiverStore = row[1] ?? "";
-      receiverName = row[3] ?? "";
-      receiverPhone = row[5] ?? "";
-      return;
-    }
-
-    if (firstCell === "收货地址") {
-      receiverAddress = row[1] ?? "";
-      return;
-    }
-
-    if (firstCell === "物品编码") {
-      inItems = true;
-      return;
-    }
-
-    if (inItems && row[0] && row[1] && isPositiveQuantity(row[3] ?? "")) {
-      output.push(
-        rowFromValues(
-          {
-            externalCode: currentExternalCode,
-            receiverStore,
-            receiverName,
-            receiverPhone,
-            receiverAddress,
-            skuCode: row[0] ?? "",
-            skuName: row[1] ?? "",
-            skuSpec: row[2] ?? "",
-            skuQuantity: row[3] ?? "",
-          },
-          output.length + 1,
-        ),
-      );
-    }
-  });
-
-  return output;
-}
-
-function parsePdfItems(text: string) {
-  const output: Array<{ skuCode: string; skuName: string; skuSpec: string; skuQuantity: string }> = [];
-  const lines = splitLines(text);
-  const itemBlocks: string[] = [];
-  let currentBlock = "";
-
-  const flushBlock = () => {
-    if (currentBlock) {
-      itemBlocks.push(currentBlock.replace(/\s+/g, " ").trim());
-      currentBlock = "";
-    }
-  };
-
-  lines.forEach((line) => {
-    if (/^第\d+页/.test(line) || /^--\s*\d+\s+of\s+\d+\s*--$/.test(line)) {
-      return;
-    }
-
-    if (/^物品类别\s+物品编码\s+物品名称/.test(line)) {
-      return;
-    }
-
-    if (/^\d+\s+/.test(line) && /ZBWP[\w-]+/.test(line)) {
-      flushBlock();
-      currentBlock = line;
-      return;
-    }
-
-    if (currentBlock) {
-      currentBlock += ` ${line}`;
-    }
-  });
-
-  flushBlock();
-
-  itemBlocks.forEach((block) => {
-    const normalized = block.replace(/\s+/g, " ").trim();
-    const baseMatch = normalized.match(/^\d+\s+\S+\s+(ZBWP[\w-]+)\s+(.+)\s+(\d+)$/);
-    if (!baseMatch) {
-      return;
-    }
-
-    const skuCode = baseMatch[1] ?? "";
-    const quantity = baseMatch[3] ?? "";
-    const middle = (baseMatch[2] ?? "").trim();
-    const tokens = middle.split(/\s+/).filter(Boolean);
-
-    if (tokens.length === 0) {
-      return;
-    }
-
-    let unit = "";
-    let spec = "";
-    const possibleUnit = tokens[tokens.length - 1] ?? "";
-
-    if (/^(件|包|瓶|桶|盒|袋|箱|个|份|条|支|套|罐|L|KG|kg|码|XL|2XL|3XL|4XL)$/i.test(possibleUnit)) {
-      unit = tokens.pop() ?? "";
-    }
-
-    const possibleSpec = tokens[tokens.length - 1] ?? "";
-    if (/[0-9*×xX/.]|kg|KG|ml|ML|L|码|斤|包|盒|桶|袋|件/.test(possibleSpec)) {
-      spec = tokens.pop() ?? "";
-    }
-
-    const skuName = tokens.join(" ").trim();
-    if (!skuName) {
-      return;
-    }
-
-    output.push({
-      skuCode,
-      skuName,
-      skuSpec: spec || unit,
-      skuQuantity: quantity,
+  chunks.forEach((chunk, index) => {
+    const baseValues: Partial<Record<UniversalImportField, string>> = {
+      externalCode: ensureUniqueExternalCode("TXT", index),
+    };
+    (Object.keys(config.fieldRegex ?? {}) as UniversalImportField[]).forEach((field) => {
+      baseValues[field] = extractTextField(chunk, config.fieldRegex?.[field]);
     });
+    output.push(...parseTextItems(chunk, config.item, baseValues, rowOffset + output.length));
   });
 
   return output;
 }
 
-function parsePdfDelivery(document: ParsedDocument) {
-  const text = document.textContent;
-  const compactText = text.replace(/[ \t]+/g, " ");
-  const externalCode =
-    firstNonEmpty(
-      extractValueFromText(compactText, "单据编号", ["单据状态"]),
-      ensureUniqueExternalCode("PDF", 0),
-    );
-  const receiverStore = extractValueFromText(compactText, "收货机构", ["订货机构"]);
-  const receiverName =
-    text.match(/收货人[:：]\s*([^\t\n\r]+)/)?.[1]?.trim() ??
-    extractValueFromText(compactText, "收货人", ["收货电话", "联系电话"]);
-  const receiverPhone =
-    text.match(/收货电话[:：]\s*(1\d{10}|0\d{2,3}-?\d{7,8})/)?.[1]?.trim() ??
-    extractValueFromText(compactText, "收货电话", ["收货地址", "地址"]);
-  const receiverAddress =
-    text.match(/收货地址[:：]\s*([^\n\r]+)/)?.[1]?.trim() ??
-    extractValueFromText(compactText, "收货地址", ["备用联系人", "物品类别", "第1页", "第2页", "打印次数"]);
-  const items = parsePdfItems(text);
+function executeConfiguredRule(document: ParsedDocument, rule: UniversalImportRuleDsl) {
+  const rows: UniversalImportRow[] = [];
+  const summaries: string[] = [];
+  const headerTransform = getTransform(rule, "header_mapping");
+  const tailTransform = getTransform(rule, "tail_text_extract");
+  const matrixTransform = getTransform(rule, "matrix_pivot");
+  const cardTransform = getTransform(rule, "card_split");
+  const textTransform = getTransform(rule, "text_record_split");
+  const useAllSheets = Boolean(getTransform(rule, "multisheet_merge"));
+  const sections = useAllSheets ? document.sections : document.sections.slice(0, 1);
 
-  return items.map((item, index) =>
-    rowFromValues(
-      {
-        externalCode,
-        receiverStore,
-        receiverName,
-        receiverPhone,
-        receiverAddress,
-        skuCode: item.skuCode,
-        skuName: item.skuName,
-        skuSpec: item.skuSpec,
-        skuQuantity: item.skuQuantity,
-      },
-      index + 1,
-    ),
-  );
-}
-
-function parseGenericTable(document: ParsedDocument) {
-  const rows = document.sections[0]?.rows ?? [];
-  const headerIndex = rows.findIndex((row) => row.includes("物品编码") || row.includes("外部商品编码") || row.includes("SKU条码"));
-  if (headerIndex < 0) {
-    return [];
+  if (textTransform) {
+    rows.push(...parseTextRecords(document, textTransform.config as TextRecordSplitConfig, rows.length));
+    summaries.push("rule:text_record_split");
   }
 
-  const header = rows[headerIndex];
-  const codeIndex = findColumnIndex(header, [/物品编码|外部商品编码|SKU条码|SKU编码/i]);
-  const nameIndex = findColumnIndex(header, [/物品名称|SKU名称/]);
-  const specIndex = findColumnIndex(header, [/规格/]);
-  const quantityIndex = findColumnIndex(header, [/发货数量|出库数量|数量/]);
-  const storeIndex = findColumnIndex(header, [/收货机构|门店/]);
+  sections.forEach((section) => {
+    const tailValues = tailTransform ? extractTailFields(section, tailTransform.config) : {};
 
-  return rows
-    .slice(headerIndex + 1)
-    .filter((row) => row[codeIndex] && row[nameIndex] && isPositiveQuantity(row[quantityIndex] ?? "1"))
-    .map((row, index) =>
-      rowFromValues(
-        {
-          externalCode: ensureUniqueExternalCode("GEN", index),
-          receiverStore: storeIndex >= 0 ? row[storeIndex] ?? "" : "",
-          skuCode: row[codeIndex] ?? "",
-          skuName: row[nameIndex] ?? "",
-          skuSpec: specIndex >= 0 ? row[specIndex] ?? "" : "",
-          skuQuantity: quantityIndex >= 0 ? row[quantityIndex] ?? "1" : "1",
-        },
-        index + 1,
-      ),
-    );
-}
+    if (cardTransform) {
+      rows.push(...parseCards(section, cardTransform.config as CardSplitConfig, rows.length));
+      summaries.push(`rule:card_split:${section.title}`);
+    }
 
-function parseGenericText(document: ParsedDocument) {
-  return splitLines(document.textContent)
-    .filter((line) => /\d/.test(line))
-    .map((line, index) =>
-      rowFromValues(
-        {
-          externalCode: ensureUniqueExternalCode("TXT", index),
-          note: line,
-        },
-        index + 1,
-      ),
-    );
-}
+    if (matrixTransform) {
+      rows.push(...parseMatrix(section, matrixTransform.config as MatrixPivotConfig, rows.length));
+      summaries.push(`rule:matrix_pivot:${section.title}`);
+    }
 
-function executeScenarioParser(document: ParsedDocument, scenario: RuleScenario) {
-  if (scenario === "haikou_delivery") {
-    return {
-      rows: parseHaikouDelivery(document),
-      summary: ["已识别头部表格和尾部收货信息组合场景"],
+    if (headerTransform) {
+      rows.push(...parseRowsByMapping(section, rule, headerTransform.config, tailValues, rows.length));
+      summaries.push(`rule:header_mapping:${section.title}`);
+    }
+  });
+
+  if (rows.length === 0 && document.fileType !== "excel") {
+    const fallbackItemConfig: TextItemConfig = {
+      regex: "([A-Za-z0-9_-]{3,})\\s+[|\\s]+(.+?)\\s+[|\\s]+([^|\\n\\r]*?)\\s+[|\\s]+(\\d+(?:\\.\\d+)?)",
+      skuCodeGroup: 1,
+      skuNameGroup: 2,
+      skuSpecGroup: 3,
+      skuQuantityGroup: 4,
     };
-  }
-
-  if (scenario === "hunan_summary") {
-    return {
-      rows: parseHunanSummary(document),
-      summary: ["已识别湖南仓配送汇总单明细场景"],
-    };
-  }
-
-  if (scenario === "multi_sheet_store") {
-    return {
-      rows: parseMultiSheetStore(document),
-      summary: ["已识别多 Sheet 门店出库场景"],
-    };
-  }
-
-  if (scenario === "store_matrix") {
-    return {
-      rows: parseStoreMatrix(document),
-      summary: ["已识别横向门店矩阵转置场景"],
-    };
-  }
-
-  if (scenario === "card_transfer") {
-    return {
-      rows: parseCardTransfer(document),
-      summary: ["已识别卡片式调拨单场景"],
-    };
-  }
-
-  if (scenario === "pdf_delivery") {
-    return {
-      rows: parsePdfDelivery(document),
-      summary: ["已识别 PDF 配送单场景"],
-    };
-  }
-
-  if (scenario === "generic_table") {
-    return {
-      rows: parseGenericTable(document),
-      summary: ["已按通用表格场景解析"],
-    };
+    rows.push(...parseTextItems(document.textContent, fallbackItemConfig, {}, 0));
+    summaries.push("rule:text_fallback");
   }
 
   return {
-    rows: parseGenericText(document),
-    summary: ["已按纯文本兜底场景解析"],
+    rows,
+    summary: summaries.length ? summaries : ["rule:no_rows"],
   };
 }
 
-function isTransformEnabled(rule: UniversalImportRuleDsl, type: RuleTransformType) {
-  return rule.transforms.some((transform) => transform.type === type && transform.enabled);
-}
-
-function executeRuleDrivenParser(document: ParsedDocument, rule: UniversalImportRuleDsl) {
-  const candidates: Array<{
-    scenario: RuleScenario;
-    enabled: boolean;
-  }> = [
+export function createDefaultRuleDsl(mapping: UniversalImportMapping, fileType: SupportedImportFileType): UniversalImportRuleDsl {
+  const commonTransforms: UniversalImportRuleDsl["transforms"] = [
+    { type: "multisheet_merge", enabled: fileType === "excel" },
     {
-      scenario: "multi_sheet_store",
-      enabled: document.fileType === "excel" && document.sections.length > 1 && isTransformEnabled(rule, "multisheet_merge"),
+      type: "header_mapping",
+      enabled: fileType === "excel",
+      config: {
+        headerRowIndex: 0,
+        dataStartRowIndex: 1,
+        fieldColumns: mapping,
+        requiredRowFields: ["skuCode", "skuName", "skuQuantity"],
+      },
     },
-    {
-      scenario: "card_transfer",
-      enabled: document.fileType === "excel" && isTransformEnabled(rule, "card_split"),
-    },
-    {
-      scenario: "store_matrix",
-      enabled: document.fileType === "excel" && isTransformEnabled(rule, "matrix_pivot"),
-    },
-    {
-      scenario: "pdf_delivery",
-      enabled: document.fileType === "pdf" && isTransformEnabled(rule, "tail_text_extract"),
-    },
-    {
-      scenario: "generic_text",
-      enabled: document.fileType === "word" && isTransformEnabled(rule, "text_record_split"),
-    },
-    {
-      scenario: "haikou_delivery",
-      enabled: document.fileType === "excel" && isTransformEnabled(rule, "tail_text_extract"),
-    },
-    {
-      scenario: "hunan_summary",
-      enabled: document.fileType === "excel" && isTransformEnabled(rule, "group_by_external_code"),
-    },
-    {
-      scenario: "generic_table",
-      enabled: document.fileType === "excel" && isTransformEnabled(rule, "header_mapping"),
-    },
+    { type: "group_by_external_code", enabled: true },
+    { type: "matrix_pivot", enabled: false },
+    { type: "split_multiline_cell", enabled: false },
+    { type: "tail_text_extract", enabled: false },
+    { type: "card_split", enabled: false },
+    { type: "text_record_split", enabled: fileType !== "excel" },
   ];
 
-  for (const candidate of candidates) {
-    if (!candidate.enabled) {
-      continue;
-    }
-
-    const result = executeScenarioParser(document, candidate.scenario);
-    if (result.rows.length > 0) {
-      return {
-        ...result,
-        summary: [`rule-transform:${candidate.scenario}`, ...result.summary],
-      };
-    }
-  }
-
-  return document.fileType === "excel"
-    ? {
-        ...executeScenarioParser(document, "generic_table"),
-        summary: ["rule-transform:generic_table"],
-      }
-    : {
-        ...executeScenarioParser(document, "generic_text"),
-        summary: ["rule-transform:generic_text"],
-      };
-}
-
-export function createDefaultRuleDsl(mapping: UniversalImportMapping, fileType: SupportedImportFileType): UniversalImportRuleDsl {
   return {
     fileType,
     mode: fileType === "excel" ? "structured" : "text",
     mapping,
-    transforms: [
-      { type: "multisheet_merge", enabled: true },
-      { type: "group_by_external_code", enabled: true },
-      { type: "matrix_pivot", enabled: true },
-      { type: "split_multiline_cell", enabled: true },
-      { type: "tail_text_extract", enabled: true },
-      { type: "card_split", enabled: true },
-      { type: "text_record_split", enabled: true },
-    ],
+    transforms: commonTransforms,
   };
 }
 
@@ -908,7 +674,7 @@ export async function executeUniversalImportRule(options: {
     originalFileName: options.originalFileName,
   });
 
-  const { rows, summary } = executeRuleDrivenParser(document, options.rule);
+  const { rows, summary } = executeConfiguredRule(document, options.rule);
   const validation = validateImportRows(rows);
 
   return {
