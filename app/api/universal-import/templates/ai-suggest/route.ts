@@ -18,6 +18,9 @@ import {
 import { isAuthenticated } from "@/lib/operator-session";
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
 type AiConfidenceItem = {
   field: UniversalImportField;
   confidence: number;
