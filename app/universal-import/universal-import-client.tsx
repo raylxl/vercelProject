@@ -128,6 +128,9 @@ type AiSuggestResponse = {
     source: string;
   }>;
   riskNotes?: string[];
+  provider?: string;
+  model?: string;
+  aiSummary?: string;
   error?: string;
 };
 
@@ -173,34 +176,16 @@ const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
   pageSize: 10,
 };
 
-const TOP_NAV_ITEMS = ["首页", "冷链业务管理", "AI考试", "系统管理"] as const;
+const TOP_NAV_ITEMS = ["智能多格式批量下单系统"] as const;
 
 const UNIVERSAL_SIDEBAR_MENUS: SidebarMenuItem[] = [
-  { label: "首页", children: [{ label: "工作台" }] },
   {
-    label: "冷链业务管理",
+    label: "智能多格式批量下单系统",
     children: [
-      {
-        label: "导入中心",
-        children: [
-          { label: "万能导入", href: "/universal-import" },
-          { label: "已导入运单", href: "/universal-import?tab=history" },
-        ],
-      },
+      { label: "万能导入V2", href: "/universal-import" },
+      { label: "规则管理", href: "/universal-import?tab=rules" },
+      { label: "历史运单", href: "/universal-import?tab=history" },
     ],
-  },
-  {
-    label: "AI考试",
-    children: [
-      {
-        label: "20260507",
-        children: [{ label: "万能导入", href: "/universal-import" }],
-      },
-    ],
-  },
-  {
-    label: "系统管理",
-    children: [{ label: "规则中心" }],
   },
 ];
 
@@ -312,7 +297,13 @@ function formatReceiverSummary(record: ShipmentHistoryRecord) {
   );
 }
 
-export function UniversalImportClient({ operatorName }: { operatorName: string }) {
+export function UniversalImportClient({
+  operatorName,
+  initialTab = "import",
+}: {
+  operatorName: string;
+  initialTab?: "import" | "history" | "rules";
+}) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cellRefs = useRef(new Map<string, HTMLInputElement>());
   const toastTimerRef = useRef<number | null>(null);
@@ -349,7 +340,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
   const [templateInfo, setTemplateInfo] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [existingCodeRows, setExistingCodeRows] = useState<ExistingExternalCodeEntry[]>([]);
-  const [activeTab, setActiveTab] = useState<"import" | "history" | "rules">("import");
+  const [activeTab, setActiveTab] = useState<"import" | "history" | "rules">(initialTab);
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [ruleList, setRuleList] = useState<RuleRecord[]>([]);
@@ -361,13 +352,12 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
   const [aiSummary, setAiSummary] = useState("");
   const [aiRiskNotes, setAiRiskNotes] = useState<string[]>([]);
   const [aiConfidenceReport, setAiConfidenceReport] = useState<Array<{ field: UniversalImportField; confidence: number; source: string }>>([]);
+  const [aiProviderLabel, setAiProviderLabel] = useState("");
+  const [aiModelLabel, setAiModelLabel] = useState("");
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
-    "冷链业务管理",
-    "冷链业务管理/导入中心",
-    "AI考试",
-    "AI考试/20260507",
+    "智能多格式批量下单系统",
   ]);
-  const [activeMenuPath, setActiveMenuPath] = useState("冷链业务管理/导入中心/万能导入");
+  const [activeMenuPath, setActiveMenuPath] = useState("智能多格式批量下单系统/万能导入V2");
 
   const existingExternalCodes = useMemo(
     () =>
@@ -413,58 +403,6 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
     () => (historyData.records ?? []).reduce((sum, record) => sum + record.items.length, 0),
     [historyData.records],
   );
-  const historyBatchCount = useMemo(
-    () => new Set((historyData.records ?? []).map((record) => record.batch.batchName)).size,
-    [historyData.records],
-  );
-  const historyFileTypeCount = useMemo(
-    () => new Set((historyData.records ?? []).map((record) => record.batch.fileType)).size,
-    [historyData.records],
-  );
-  const historyBatchSummaries = useMemo(() => {
-    const batchMap = new Map<
-      string,
-      {
-        batchName: string;
-        originalFileName: string;
-        sourceSheetName: string;
-        fileType: string;
-        createdBy: string;
-        status: string;
-        createdAt: string;
-        shipmentCount: number;
-        itemCount: number;
-        receiverStores: Set<string>;
-      }
-    >();
-
-    for (const record of historyData.records ?? []) {
-      const current = batchMap.get(record.batch.batchName);
-      if (current) {
-        current.shipmentCount += 1;
-        current.itemCount += record.items.length;
-        if (record.receiverStore) {
-          current.receiverStores.add(record.receiverStore);
-        }
-        continue;
-      }
-
-      batchMap.set(record.batch.batchName, {
-        batchName: record.batch.batchName,
-        originalFileName: record.batch.originalFileName,
-        sourceSheetName: record.batch.sourceSheetName,
-        fileType: record.batch.fileType,
-        createdBy: record.batch.createdBy,
-        status: record.batch.status,
-        createdAt: record.batch.createdAt,
-        shipmentCount: 1,
-        itemCount: record.items.length,
-        receiverStores: new Set(record.receiverStore ? [record.receiverStore] : []),
-      });
-    }
-
-    return Array.from(batchMap.values());
-  }, [historyData.records]);
   const [selectedHistoryId, setSelectedHistoryId] = useState("");
   const selectedHistoryRecord = useMemo(
     () => historyData.records?.find((record) => record.id === selectedHistoryId) ?? historyData.records?.[0] ?? null,
@@ -648,6 +586,8 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
     setAiSummary("");
     setAiRiskNotes([]);
     setAiConfidenceReport([]);
+    setAiProviderLabel("");
+    setAiModelLabel("");
     setParseProgress({ active: true, value: 12, label: "正在试解析文件...", processed: 0, total: 100 });
 
     try {
@@ -716,11 +656,16 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       setSheetName(data.documentSummary.sheetName);
       setAiRiskNotes(data.riskNotes ?? []);
       setAiConfidenceReport(data.confidenceReport ?? []);
+      setAiProviderLabel(data.provider === "siliconflow" ? "SiliconFlow 实时生成" : "本地兜底规则");
+      setAiModelLabel(data.model ?? "");
       setAiSummary(
-        `AI 已生成建议规则：文件类型 ${data.documentSummary.fileType}，识别表头 ${data.documentSummary.headers.length} 列。`,
+        data.aiSummary ||
+          `AI 已生成建议规则：文件类型 ${data.documentSummary.fileType}，识别表头 ${data.documentSummary.headers.length} 列。`,
       );
       setTemplateInfo("AI 建议规则已就绪，可直接试解析或继续人工调整。");
     } catch (error) {
+      setAiProviderLabel("");
+      setAiModelLabel("");
       setAiSummary(error instanceof Error ? error.message : "AI 规则建议生成失败，请稍后重试。");
     }
   }
@@ -950,8 +895,9 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
       setActiveTab("history");
       return;
     }
-    if (item.label === "规则中心") {
+    if (item.href === "/universal-import?tab=rules") {
       setActiveTab("rules");
+      return;
     }
   }
 
@@ -989,6 +935,20 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
   }, []);
 
   useEffect(() => {
+    if (activeTab === "history") {
+      setActiveMenuPath("智能多格式批量下单系统/历史运单");
+      return;
+    }
+
+    if (activeTab === "rules") {
+      setActiveMenuPath("智能多格式批量下单系统/规则管理");
+      return;
+    }
+
+    setActiveMenuPath("智能多格式批量下单系统/万能导入V2");
+  }, [activeTab]);
+
+  useEffect(() => {
     setRuleDsl((current) => ({
       ...current,
       fileType,
@@ -1011,8 +971,8 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
         <div className="sidebar-brand">
           <div className="brand-logo">AI</div>
           <div className="brand-copy">
-            <strong>AI考试</strong>
-            <span>UNIVERSAL IMPORT</span>
+            <strong>智能多格式批量下单系统</strong>
+            <span>SMART MULTI-FORMAT ORDERING</span>
           </div>
         </div>
 
@@ -1023,7 +983,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
         <div className="sidebar-env-card">
           <div>
             <strong>{operatorName}</strong>
-            <span>已登录，可切换导入中心、规则管理和历史运单。</span>
+            <span>已登录，当前仅保留万能导入V2相关菜单。</span>
           </div>
           <span className="env-toggle active" />
         </div>
@@ -1035,7 +995,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
             {TOP_NAV_ITEMS.map((item) => (
               <button
                 type="button"
-                className={`global-nav-item${item === "冷链业务管理" ? " active" : ""}`}
+                className="global-nav-item active"
                 key={item}
               >
                 {item}
@@ -1044,7 +1004,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
           </div>
 
           <div className="global-topbar-tools">
-            <span className="global-pill">万能导入</span>
+            <span className="global-pill">万能导入V2</span>
             <span className="global-pill alert">已登录</span>
             <button
               type="button"
@@ -1063,10 +1023,10 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
               返回
             </Link>
             <button type="button" className={`workspace-tab${activeTab === "import" ? " active" : ""}`} onClick={() => setActiveTab("import")}>
-              万能导入
+              万能导入V2
             </button>
             <button type="button" className={`workspace-tab${activeTab === "history" ? " active" : ""}`} onClick={() => setActiveTab("history")}>
-              已导入运单
+              历史运单
             </button>
             <button type="button" className={`workspace-tab${activeTab === "rules" ? " active" : ""}`} onClick={() => setActiveTab("rules")}>
               规则管理
@@ -1079,7 +1039,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                 <section className="workspace-card">
                   <div className="workspace-header">
                     <div>
-                      <p className="workspace-breadcrumb">AI考试 / 20260507 / 万能导入</p>
+                      <p className="workspace-breadcrumb">智能多格式批量下单系统 / 万能导入V2</p>
                       <h1>智能多格式批量下单系统</h1>
                       <p>当前版本已支持 Excel / Word / PDF 样例试解析、AI 规则建议、规则 DSL 基础结构、在线编辑、历史入库与规则管理。</p>
                     </div>
@@ -1180,6 +1140,21 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                       <p className={`status-text${status ? " visible" : ""}`}>{status || " "}</p>
                       <p className="footnote">{aiSummary || ruleTestSummary || rowErrorSummary[0] || "这里会显示 AI 建议、试解析和校验结果。"}</p>
                     </div>
+
+                    {aiProviderLabel || aiModelLabel ? (
+                      <div className="overview-grid" style={{ marginTop: 16 }}>
+                        <article className="overview-card">
+                          <p>AI 建议来源</p>
+                          <strong>{aiProviderLabel || "-"}</strong>
+                          <span>用于区分真实大模型输出还是本地兜底规则</span>
+                        </article>
+                        <article className="overview-card">
+                          <p>当前模型</p>
+                          <strong>{aiModelLabel || "-"}</strong>
+                          <span>本次规则建议所使用的模型标识</span>
+                        </article>
+                      </div>
+                    ) : null}
 
                     {aiRiskNotes.length > 0 ? (
                       <div className="error-list">
@@ -1380,8 +1355,8 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
               <section className="workspace-card">
                 <div className="workspace-header" style={{ marginBottom: 16 }}>
                   <div>
-                    <p className="workspace-breadcrumb">AI考试 / 20260507 / 已导入运单</p>
-                    <h1>已导入运单</h1>
+                    <p className="workspace-breadcrumb">智能多格式批量下单系统 / 历史运单</p>
+                    <h1>历史运单</h1>
                   </div>
                   <div className="workspace-header-meta">
                     <div className="meta-chip"><span>总运单</span><strong>{historyShipmentCount}</strong></div>
@@ -1394,7 +1369,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                 <div className="card-heading">
                   <div>
                     <p className="section-kicker">历史</p>
-                    <h3>已导入运单列表</h3>
+                    <h3>历史运单列表</h3>
                   </div>
                   <button type="button" className="secondary-button" onClick={() => void loadHistory({ ...historyFilters })}>
                     刷新
@@ -1403,9 +1378,9 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
 
                 <div className="overview-grid history-overview-grid">
                   <article className="overview-card">
-                    <p>导入批次概览</p>
-                    <strong>{historyBatchCount}</strong>
-                    <span>当前筛选结果共覆盖 {historyShipmentCount} 个运单</span>
+                    <p>历史运单总数</p>
+                    <strong>{historyShipmentCount}</strong>
+                    <span>当前筛选结果中共检索到的历史运单数量</span>
                   </article>
                   <article className="overview-card">
                     <p>SKU 明细量</p>
@@ -1422,37 +1397,6 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                     <strong>{selectedHistoryRecord?.externalCode ?? "-"}</strong>
                     <span>下方可查看运单明细、来源文件和收货信息</span>
                   </article>
-                </div>
-
-                <div className="history-batch-list">
-                  {historyBatchSummaries.length === 0 ? (
-                    <div className="empty-row history-empty-card">当前筛选条件下暂无批次结果。</div>
-                  ) : (
-                    historyBatchSummaries.map((batch) => (
-                      <article className="history-batch-card" key={batch.batchName}>
-                        <div className="history-batch-topline">
-                          <strong>{batch.batchName}</strong>
-                          <span className="history-pill">{formatFileTypeLabel(batch.fileType)}</span>
-                        </div>
-                        <p>{batch.originalFileName || "-"}</p>
-                        <div className="history-batch-meta">
-                          <span>运单 {batch.shipmentCount}</span>
-                          <span>SKU {batch.itemCount}</span>
-                          <span>Sheet {batch.sourceSheetName || "-"}</span>
-                        </div>
-                        <div className="history-batch-meta">
-                          <span>状态 {batch.status}</span>
-                          <span>操作人 {batch.createdBy}</span>
-                          <span>时间 {formatDateTime(batch.createdAt)}</span>
-                        </div>
-                        <div className="history-batch-tags">
-                          {Array.from(batch.receiverStores).slice(0, 4).map((store) => (
-                            <span className="history-tag" key={store}>{store}</span>
-                          ))}
-                        </div>
-                      </article>
-                    ))
-                  )}
                 </div>
 
                 <div className="history-filters">
@@ -1485,7 +1429,6 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                   <table className="data-table history-table">
                     <thead>
                       <tr>
-                        <th>批次</th>
                         <th>外部编码</th>
                         <th>收货信息</th>
                         <th>SKU 数</th>
@@ -1496,9 +1439,9 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                     </thead>
                     <tbody>
                       {historyLoading ? (
-                        <tr><td colSpan={7} className="empty-row">正在加载历史数据...</td></tr>
+                        <tr><td colSpan={6} className="empty-row">正在加载历史数据...</td></tr>
                       ) : (historyData.records ?? []).length === 0 ? (
-                        <tr><td colSpan={7} className="empty-row">暂无已导入运单记录。</td></tr>
+                        <tr><td colSpan={6} className="empty-row">暂无历史运单记录。</td></tr>
                       ) : (
                         historyData.records?.map((record) => (
                           <tr
@@ -1506,7 +1449,6 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                             className={selectedHistoryRecord?.id === record.id ? "history-row-active" : ""}
                             onClick={() => setSelectedHistoryId(record.id)}
                           >
-                            <td>{record.batch.batchName}</td>
                             <td>{record.externalCode}</td>
                             <td>{formatReceiverSummary(record)}</td>
                             <td>{record.items.length}</td>
@@ -1548,7 +1490,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
                         <article className="overview-card">
                           <p>导入结果</p>
                           <strong>{selectedHistoryRecord.items.length} 个 SKU</strong>
-                          <span>批次状态：{selectedHistoryRecord.batch.status}</span>
+                          <span>导入状态：{selectedHistoryRecord.batch.status}</span>
                         </article>
                       </div>
                       <div className="table-shell history-detail-shell">
@@ -1597,7 +1539,7 @@ export function UniversalImportClient({ operatorName }: { operatorName: string }
               <section className="workspace-card">
                 <div className="workspace-header" style={{ marginBottom: 16 }}>
                   <div>
-                    <p className="workspace-breadcrumb">AI考试 / 20260507 / 规则管理</p>
+                    <p className="workspace-breadcrumb">智能多格式批量下单系统 / 规则管理</p>
                     <h1>规则管理中心</h1>
                     <p>支持查看规则列表、保存当前规则、更新规则版本、应用规则、删除规则，以及结合样例文件执行试解析。</p>
                   </div>

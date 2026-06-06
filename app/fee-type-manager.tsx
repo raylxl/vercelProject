@@ -39,42 +39,29 @@ type PaginationState = {
 
 type SidebarMenuItem = {
   label: string;
-  page?: "fee-type-manager" | "universal-import";
+  href?: string;
   children?: SidebarMenuItem[];
 };
 
-const TOP_NAV_ITEMS = ["首页", "冷链财务管理", "AI考试", "系统管理"] as const;
+const TOP_NAV_ITEMS = ["智能多格式批量下单系统"] as const;
 
 const SIDEBAR_MENUS: SidebarMenuItem[] = [
   {
-    label: "首页",
-    children: [{ label: "工作台" }],
-  },
-  {
-    label: "冷链财务管理",
+    label: "智能多格式批量下单系统",
     children: [
       {
-        label: "基础数据",
-        children: [{ label: "费用类型维护" }],
+        label: "万能导入V2",
+        href: "/universal-import",
       },
       {
-        label: "导入中心",
-        children: [{ label: "万能导入", page: "universal-import" }],
+        label: "规则管理",
+        href: "/universal-import?tab=rules",
       },
-    ],
-  },
-  {
-    label: "AI考试",
-    children: [
       {
-        label: "20260507",
-        children: [{ label: "万能导入", page: "universal-import" }],
+        label: "历史运单",
+        href: "/universal-import?tab=history",
       },
     ],
-  },
-  {
-    label: "系统管理",
-    children: [{ label: "模板学习记录" }],
   },
 ];
 
@@ -118,14 +105,6 @@ function filterSidebarMenus(items: SidebarMenuItem[], keyword: string): SidebarM
   }, []);
 }
 
-function hasPageInTree(item: SidebarMenuItem, page: "fee-type-manager" | "universal-import"): boolean {
-  if (item.page === page) {
-    return true;
-  }
-
-  return item.children?.some((child) => hasPageInTree(child, page)) ?? false;
-}
-
 export function FeeTypeManager({
   isAuthenticated,
   initialOperatorName,
@@ -133,12 +112,9 @@ export function FeeTypeManager({
   const [sidebarKeyword, setSidebarKeyword] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
-    "冷链财务管理",
-    "冷链财务管理/导入中心",
-    "AI考试",
-    "AI考试/20260507",
+    "智能多格式批量下单系统",
   ]);
-  const [activeMenuPath, setActiveMenuPath] = useState("冷链财务管理/导入中心/万能导入");
+  const [activeMenuPath, setActiveMenuPath] = useState("智能多格式批量下单系统/万能导入V2");
   const [loginForm, setLoginForm] = useState({
     username: "",
     password: "",
@@ -234,14 +210,11 @@ export function FeeTypeManager({
 
     setActiveMenuPath(path);
 
-    if (item.page === "universal-import") {
-      window.location.assign("/universal-import");
+    if (!item.href) {
       return;
     }
 
-    if (!hasPageInTree(item, "universal-import")) {
-      return;
-    }
+    window.location.assign(item.href);
   }
 
   function renderSidebarMenus(items: SidebarMenuItem[], parentPath = "", depth = 0): ReactNode {
@@ -291,8 +264,8 @@ export function FeeTypeManager({
           <div className="login-brand">
             <div className="brand-logo">AI</div>
             <div className="brand-copy">
-              <strong>万能导入系统</strong>
-              <span>登录后进入万能导入页面</span>
+              <strong>智能多格式批量下单系统</strong>
+              <span>登录后进入万能导入V2工作台</span>
             </div>
           </div>
 
@@ -300,7 +273,7 @@ export function FeeTypeManager({
             <p className="section-kicker">Account Access</p>
             <h1>登录或注册账号</h1>
             <p>
-              支持登录后进入万能导入模块。账号最长 {ACCOUNT_NAME_MAX_LENGTH} 位，密码为数字且最长
+              支持登录后进入智能多格式批量下单系统。账号最长 {ACCOUNT_NAME_MAX_LENGTH} 位，密码为数字且最长
               {PASSWORD_MAX_LENGTH} 位。
             </p>
           </div>
@@ -376,16 +349,9 @@ export function FeeTypeManager({
         <div className="sidebar-brand">
           <div className="brand-logo">AI</div>
           <div className="brand-copy">
-            <strong>冷链财务中台</strong>
-            <span>UNIVERSAL IMPORT CENTER</span>
+            <strong>智能多格式批量下单系统</strong>
+            <span>SMART MULTI-FORMAT ORDERING</span>
           </div>
-        </div>
-
-        <div className="sidebar-org-switch">
-          <span>财务业务线</span>
-          <button type="button" className="sidebar-org-button">
-            切换
-          </button>
         </div>
 
         <label className="sidebar-search">
@@ -404,7 +370,7 @@ export function FeeTypeManager({
         <div className="sidebar-env-card">
           <div>
             <strong>{initialOperatorName}</strong>
-            <span>当前入口页已接入完整后台菜单，登录后可直接进入万能导入。</span>
+            <span>当前入口页仅保留万能导入V2相关菜单，登录后可直接进入系统。</span>
           </div>
           <span className="env-toggle active" />
         </div>
@@ -413,10 +379,10 @@ export function FeeTypeManager({
       <div className="dashboard-main">
         <header className="global-topbar">
           <div className="global-topbar-nav">
-            {TOP_NAV_ITEMS.map((item, index) => (
+            {TOP_NAV_ITEMS.map((item) => (
               <button
                 type="button"
-                className={`global-nav-item${item === "冷链财务管理" ? " active" : ""}`}
+                className="global-nav-item active"
                 key={item}
               >
                 {item}
@@ -425,7 +391,7 @@ export function FeeTypeManager({
           </div>
 
           <div className="global-topbar-tools">
-            <span className="global-pill">万能导入</span>
+            <span className="global-pill">万能导入V2</span>
             <span className="global-pill alert">已登录</span>
             <button
               type="button"
@@ -445,7 +411,7 @@ export function FeeTypeManager({
               className="workspace-tab active"
               onClick={() => window.location.assign("/universal-import")}
             >
-              万能导入
+              万能导入V2
             </button>
           </div>
 
@@ -453,14 +419,14 @@ export function FeeTypeManager({
             <section className="workspace-card">
               <div className="workspace-header" style={{ marginBottom: 16 }}>
                 <div>
-                  <p className="workspace-breadcrumb">冷链财务管理 / 导入中心 / 万能导入</p>
-                  <h1>系统已切换到万能导入入口</h1>
+                  <p className="workspace-breadcrumb">智能多格式批量下单系统 / 万能导入V2</p>
+                  <h1>系统已切换到万能导入V2入口</h1>
                 </div>
               </div>
 
               <div className="status-panel">
                 <p className="status-text visible">
-                  当前首页仅作为登录入口和跳转页，登录后会自动进入万能导入。
+                  当前首页仅作为登录入口和跳转页，登录后会自动进入智能多格式批量下单系统。
                 </p>
                 <p className="footnote">如果没有自动跳转，可以点击下方按钮进入。</p>
               </div>
@@ -471,7 +437,7 @@ export function FeeTypeManager({
                   className="primary-button"
                   onClick={() => window.location.assign("/universal-import")}
                 >
-                  进入万能导入
+                  进入万能导入V2
                 </button>
               </div>
             </section>

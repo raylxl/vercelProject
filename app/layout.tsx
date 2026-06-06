@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "费用类型维护",
-  description: "费用类型维护页面，支持查询、新增、编辑和批量删除。",
+  title: "智能多格式批量下单系统",
+  description: "智能多格式批量下单系统，支持万能导入V2、规则管理与历史运单查询。",
 };
 
 export default function RootLayout({

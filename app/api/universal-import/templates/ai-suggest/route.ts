@@ -1,14 +1,118 @@
 import {
   inferMappingFromHeaders,
   UNIVERSAL_IMPORT_FIELDS,
+  type UniversalImportField,
+  type UniversalImportMapping,
 } from "@/lib/universal-import";
 import {
   createDefaultRuleDsl,
   parseImportDocument,
   type SupportedImportFileType,
+  type UniversalImportRuleDsl,
 } from "@/lib/universal-import-engine";
+import {
+  createSiliconFlowChatCompletion,
+  getSiliconFlowModel,
+  isSiliconFlowConfigured,
+} from "@/lib/siliconflow";
 import { isAuthenticated } from "@/lib/operator-session";
 import { NextResponse } from "next/server";
+
+type AiConfidenceItem = {
+  field: UniversalImportField;
+  confidence: number;
+  source: string;
+};
+
+type AiRuleSuggestion = {
+  summary: string;
+  mode?: UniversalImportRuleDsl["mode"];
+  mapping?: Partial<Record<UniversalImportField, number | null>>;
+  enabledTransforms?: string[];
+  confidenceReport?: AiConfidenceItem[];
+  riskNotes?: string[];
+};
+
+type AiSuggestSuccessResponse = {
+  documentSummary: {
+    fileType: SupportedImportFileType;
+    sheetName: string;
+    headers: string[];
+    rowCount: number;
+    sectionCount: number;
+    textPreview: string;
+  };
+  suggestedRule: UniversalImportRuleDsl;
+  confidenceReport: AiConfidenceItem[];
+  riskNotes: string[];
+  provider: "siliconflow" | "fallback";
+  model: string;
+  aiSummary: string;
+};
+
+const SUPPORTED_TRANSFORMS = new Set<UniversalImportRuleDsl["transforms"][number]["type"]>([
+  "header_mapping",
+  "multisheet_merge",
+  "group_by_external_code",
+  "matrix_pivot",
+  "split_multiline_cell",
+  "tail_text_extract",
+  "card_split",
+  "text_record_split",
+]);
+
+const RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    summary: { type: "string" },
+    mode: {
+      type: "string",
+      enum: ["mapping", "text", "structured"],
+    },
+    mapping: {
+      type: "object",
+      additionalProperties: false,
+      properties: Object.fromEntries(
+        UNIVERSAL_IMPORT_FIELDS.map((field) => [
+          field.key,
+          {
+            anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+          },
+        ]),
+      ),
+    },
+    enabledTransforms: {
+      type: "array",
+      items: { type: "string" },
+    },
+    confidenceReport: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          field: {
+            type: "string",
+            enum: UNIVERSAL_IMPORT_FIELDS.map((field) => field.key),
+          },
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+          },
+          source: { type: "string" },
+        },
+        required: ["field", "confidence", "source"],
+      },
+    },
+    riskNotes: {
+      type: "array",
+      items: { type: "string" },
+    },
+  },
+  required: ["summary", "mode", "mapping", "enabledTransforms", "confidenceReport", "riskNotes"],
+} as const;
 
 async function ensureAuthenticated() {
   if (!(await isAuthenticated())) {
@@ -16,6 +120,173 @@ async function ensureAuthenticated() {
   }
 
   return null;
+}
+
+function createFallbackSuggestion(
+  fileType: SupportedImportFileType,
+  suggestedMapping: UniversalImportMapping,
+  document: Awaited<ReturnType<typeof parseImportDocument>>,
+): AiSuggestSuccessResponse {
+  const suggestedRule = createDefaultRuleDsl(suggestedMapping, fileType);
+
+  return {
+    documentSummary: {
+      fileType,
+      sheetName: document.sheetName,
+      headers: document.headers,
+      rowCount: document.rawRows.length,
+      sectionCount: document.sections.length,
+      textPreview: document.textContent.slice(0, 800),
+    },
+    suggestedRule,
+    confidenceReport: UNIVERSAL_IMPORT_FIELDS.map((field) => ({
+      field: field.key,
+      confidence: typeof suggestedMapping[field.key] === "number" ? 0.92 : 0.45,
+      source: typeof suggestedMapping[field.key] === "number" ? "header-match" : "heuristic-fallback",
+    })),
+    riskNotes: [
+      fileType !== "excel" ? "当前为非 Excel 文档，部分字段来自文本结构推断，建议人工确认。" : "",
+      document.sections.length > 1 ? "检测到多段或多 Sheet 内容，建议开启多 Sheet 合并或卡片拆分规则。" : "",
+      document.rawRows.length === 0 ? "未识别到标准表格数据，建议切换到纯文本解析模式。" : "",
+      "当前结果来自本地兜底规则，并非大模型输出。",
+    ].filter(Boolean),
+    provider: "fallback",
+    model: "local-heuristic",
+    aiSummary: "本次 AI 建议走了本地兜底逻辑，未使用远程大模型输出。",
+  };
+}
+
+function normalizeMapping(candidate: Partial<Record<UniversalImportField, number | null>> | undefined, fallback: UniversalImportMapping) {
+  return Object.fromEntries(
+    UNIVERSAL_IMPORT_FIELDS.map((field) => {
+      const value = candidate?.[field.key];
+      return [field.key, typeof value === "number" ? value : fallback[field.key]];
+    }),
+  ) as UniversalImportMapping;
+}
+
+function mergeTransforms(baseRule: UniversalImportRuleDsl, enabledTransforms: string[] | undefined) {
+  if (!enabledTransforms?.length) {
+    return baseRule;
+  }
+
+  const enabledSet = new Set(
+    enabledTransforms.filter(
+      (transform): transform is UniversalImportRuleDsl["transforms"][number]["type"] =>
+        SUPPORTED_TRANSFORMS.has(transform as UniversalImportRuleDsl["transforms"][number]["type"]),
+    ),
+  );
+
+  return {
+    ...baseRule,
+    transforms: baseRule.transforms.map((transform) => ({
+      ...transform,
+      enabled: enabledSet.has(transform.type),
+    })),
+  };
+}
+
+function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, fileType: SupportedImportFileType) {
+  const sectionPreview = document.sections.slice(0, 4).map((section, index) => ({
+    index,
+    title: section.title,
+    rowCount: section.rows.length,
+    rows: section.rows.slice(0, 8),
+  }));
+
+  return JSON.stringify(
+    {
+      task: "根据物流批量下单文件结构生成可编辑的导入规则建议",
+      fileType,
+      sheetName: document.sheetName,
+      headers: document.headers,
+      rawRowCount: document.rawRows.length,
+      sectionCount: document.sections.length,
+      sectionPreview,
+      textPreview: document.textContent.slice(0, 2600),
+      targetFields: UNIVERSAL_IMPORT_FIELDS.map((field) => ({
+        key: field.key,
+        label: field.label,
+        required: field.required,
+      })),
+      availableTransforms: [
+        "header_mapping",
+        "multisheet_merge",
+        "group_by_external_code",
+        "matrix_pivot",
+        "split_multiline_cell",
+        "tail_text_extract",
+        "card_split",
+        "text_record_split",
+      ],
+      constraints: [
+        "不要编造不存在的列索引",
+        "如无法确定映射，请返回 null 并在 riskNotes 说明",
+        "Excel 更倾向 structured 或 mapping，Word/PDF 更倾向 text 或 structured",
+        "confidenceReport 要逐字段返回 0 到 1 的置信度",
+        "enabledTransforms 只返回需要启用的 transform type",
+        "enabledTransforms 只能从给定的 availableTransforms 中选择",
+        "如果文档是 PDF 或弱结构文本，请重点说明哪些字段需要通过尾部文本、分段或卡片拆分提取",
+      ],
+    },
+    null,
+    2,
+  );
+}
+
+async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImportDocument>>, fileType: SupportedImportFileType, inferredMapping: UniversalImportMapping) {
+  const content = await createSiliconFlowChatCompletion({
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是物流万能导入规则设计助手。你要根据文档结构生成稳定、保守、可编辑的规则建议。必须返回合法 JSON，不要输出额外解释。",
+      },
+      {
+        role: "user",
+        content: buildPrompt(document, fileType),
+      },
+    ],
+    temperature: 0.1,
+    maxTokens: 2200,
+    responseFormat: {
+      type: "json_schema",
+      json_schema: {
+        name: "universal_import_rule_suggestion",
+        schema: RESPONSE_SCHEMA as unknown as Record<string, unknown>,
+      },
+    },
+  });
+
+  const parsed = JSON.parse(content) as AiRuleSuggestion;
+  const mapping = normalizeMapping(parsed.mapping, inferredMapping);
+  const baseRule = createDefaultRuleDsl(mapping, fileType);
+  const mode = parsed.mode ?? baseRule.mode;
+  const suggestedRule = mergeTransforms(
+    {
+      ...baseRule,
+      mode,
+      mapping,
+    },
+    parsed.enabledTransforms,
+  );
+
+  return {
+    suggestedRule,
+    confidenceReport:
+      parsed.confidenceReport?.map((item) => ({
+        field: item.field,
+        confidence: Math.max(0, Math.min(1, item.confidence)),
+        source: item.source || "llm",
+      })) ??
+      UNIVERSAL_IMPORT_FIELDS.map((field) => ({
+        field: field.key,
+        confidence: typeof mapping[field.key] === "number" ? 0.8 : 0.3,
+        source: "llm-default",
+      })),
+    riskNotes: parsed.riskNotes?.filter(Boolean) ?? [],
+    aiSummary: parsed.summary,
+  };
 }
 
 export async function POST(request: Request) {
@@ -41,34 +312,35 @@ export async function POST(request: Request) {
       originalFileName: file.name,
     });
 
-    const suggestedMapping = inferMappingFromHeaders(document.headers);
-    const suggestedRule = createDefaultRuleDsl(suggestedMapping, fileType);
+    const inferredMapping = inferMappingFromHeaders(document.headers);
 
-    const confidenceReport = UNIVERSAL_IMPORT_FIELDS.map((field) => ({
-      field: field.key,
-      confidence: typeof suggestedMapping[field.key] === "number" ? 0.92 : 0.45,
-      source: typeof suggestedMapping[field.key] === "number" ? "header-match" : "inference",
-    }));
+    if (!isSiliconFlowConfigured()) {
+      return NextResponse.json(createFallbackSuggestion(fileType, inferredMapping, document));
+    }
 
-    const riskNotes = [
-      fileType !== "excel" ? "当前为非 Excel 文档，部分字段来自文本结构推断，建议人工确认。" : "",
-      document.sections.length > 1 ? "检测到多段或多 Sheet 内容，建议开启多 Sheet 合并或卡片拆分规则。" : "",
-      document.rawRows.length === 0 ? "未识别到标准表格数据，建议切换到纯文本解析模式。" : "",
-    ].filter(Boolean);
+    try {
+      const llmResult = await generateRuleWithLlm(document, fileType, inferredMapping);
 
-    return NextResponse.json({
-      documentSummary: {
-        fileType,
-        sheetName: document.sheetName,
-        headers: document.headers,
-        rowCount: document.rawRows.length,
-        sectionCount: document.sections.length,
-        textPreview: document.textContent.slice(0, 800),
-      },
-      suggestedRule,
-      confidenceReport,
-      riskNotes,
-    });
+      return NextResponse.json({
+        documentSummary: {
+          fileType,
+          sheetName: document.sheetName,
+          headers: document.headers,
+          rowCount: document.rawRows.length,
+          sectionCount: document.sections.length,
+          textPreview: document.textContent.slice(0, 800),
+        },
+        suggestedRule: llmResult.suggestedRule,
+        confidenceReport: llmResult.confidenceReport,
+        riskNotes: llmResult.riskNotes,
+        provider: "siliconflow",
+        model: getSiliconFlowModel(),
+        aiSummary: llmResult.aiSummary,
+      });
+    } catch (llmError) {
+      console.error("SiliconFlow ai-suggest failed, fallback to heuristic", llmError);
+      return NextResponse.json(createFallbackSuggestion(fileType, inferredMapping, document));
+    }
   } catch (error) {
     console.error("POST /api/universal-import/templates/ai-suggest failed", error);
     return NextResponse.json({ error: "AI 规则建议生成失败，请稍后重试。" }, { status: 500 });
