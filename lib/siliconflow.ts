@@ -129,10 +129,11 @@ export async function createLlmChatCompletion(options: ChatCompletionOptions & {
       throw new Error(data.error?.message || "SiliconFlow request failed");
     }
 
-    const content = data.choices?.[0]?.message?.content?.trim();
+    const message = data.choices?.[0]?.message;
+    const content = (message?.content || message?.reasoning_content || "").trim();
 
     if (!content) {
-      throw new Error("SiliconFlow returned empty content");
+      throw new Error(`${provider === "deepseek" ? "DeepSeek" : "SiliconFlow"} returned empty content`);
     }
 
     return content;

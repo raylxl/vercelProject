@@ -408,7 +408,7 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
       },
     ],
     temperature: 0.1,
-    maxTokens: 1400,
+    maxTokens: 2600,
     timeoutMs: AI_SUGGEST_TIMEOUT_MS,
     responseFormat: {
       type: "json_schema",
