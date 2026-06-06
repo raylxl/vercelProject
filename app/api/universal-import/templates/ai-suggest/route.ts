@@ -193,6 +193,30 @@ function mergeTransforms(baseRule: UniversalImportRuleDsl, enabledTransforms: st
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeAiTransformConfig(config: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!isRecord(config)) {
+    return {};
+  }
+
+  const nested = isRecord(config.config) ? normalizeAiTransformConfig(config.config) : {};
+  const output: Record<string, unknown> = {};
+
+  Object.entries(config).forEach(([key, value]) => {
+    if (key !== "config" && key !== "type") {
+      output[key] = value;
+    }
+  });
+
+  return {
+    ...output,
+    ...nested,
+  };
+}
+
 function mergeTransformConfigs(baseRule: UniversalImportRuleDsl, configs: Record<string, Record<string, unknown>> | undefined) {
   if (!configs) {
     return baseRule;
@@ -204,9 +228,31 @@ function mergeTransformConfigs(baseRule: UniversalImportRuleDsl, configs: Record
       ...transform,
       config: {
         ...(transform.config ?? {}),
-        ...(configs[transform.type] ?? {}),
+        ...normalizeAiTransformConfig(configs[transform.type]),
       },
     })),
+  };
+}
+
+function ensureMultiSectionMerge(rule: UniversalImportRuleDsl, sectionCount: number) {
+  if (sectionCount <= 1) {
+    return rule;
+  }
+
+  return {
+    ...rule,
+    transforms: rule.transforms.map((transform) =>
+      transform.type === "multisheet_merge"
+        ? {
+            ...transform,
+            enabled: true,
+            config: {
+              ...(transform.config ?? {}),
+              mergeAllSheets: true,
+            },
+          }
+        : transform,
+    ),
   };
 }
 
@@ -269,6 +315,16 @@ function buildPrompt(document: Awaited<ReturnType<typeof parseImportDocument>>, 
         "enabledTransforms 只返回需要启用的 transform type",
         "enabledTransforms 只能从给定的 availableTransforms 中选择",
         "transformConfigs 必须把每个启用 transform 的执行参数写清楚，执行器只解释这些配置，不会按文件名或样例类型自动适配",
+        "transformConfigs 的 key 必须是 transform type，value 必须是直接配置对象，例如 {\"header_mapping\":{\"headerRowIndex\":1}}，禁止写成 {\"header_mapping\":{\"type\":\"header_mapping\",\"config\":{...}}}",
+        "fieldColumns、rowFieldColumns、itemColumns 必须使用对象映射，例如 {\"skuCode\":2,\"skuName\":3,\"skuQuantity\":5}，禁止使用数组形式",
+        "fieldRegex 必须优先使用对象映射，例如 {\"receiverName\":\"收货人[:：]\\\\s*(.+)\"}；如使用命名捕获组，命名必须等于目标字段 key",
+        "text_record_split.item 的 skuCodeGroup、skuNameGroup、skuSpecGroup、skuQuantityGroup 优先返回数字捕获组序号；只有使用命名捕获组时才返回字段名字符串",
+        "矩阵转置时 rowFieldColumns 必须映射 SKU 行上的固定字段，matrixStartColumn/matrixEndColumn 才是需要转置为 receiverStore + skuQuantity 的列范围",
+        "如果 sectionCount 大于 1 且每个 Sheet 都是同结构订单，请启用 multisheet_merge，并为每个 Sheet 使用相同配置解释后合并",
+        "如果启用了 matrix_pivot，header_mapping 通常只作为字段识别参考，不要依赖它单独生成明细行；除非确实需要双产出，否则不要设置 emitWithMatrix",
+        "matrix_pivot 的 matrixStartColumn/matrixEndColumn 必须覆盖横向业务维度列（如门店、日期），不要把库存数量、可用数量、结余、合计等数值指标列当作 receiverStore",
+        "tail_text_extract 可以和 text_record_split 组合使用：前者提取全局收货信息，后者提取物品行，试解析时文本物品行会继承全局字段",
+        "正则要避免贪婪吞掉后续字段：电话只捕获手机号/座机号，姓名/门店/地址遇到 | 或下一个标签时应停止",
         "header_mapping.config 可包含 headerRowIndex、dataStartRowIndex、dataEndRowIndex、fieldColumns、requiredRowFields、skipRowRegex",
         "tail_text_extract.config 可包含 fieldRegex 或 keyValueLabels，用来从尾部/全文提取收货信息、外部编码等",
         "matrix_pivot.config 可包含 headerRowIndex、dataStartRowIndex、rowFieldColumns、matrixStartColumn、matrixEndColumn、excludeHeaderRegex、externalCodeTemplate",
@@ -312,14 +368,14 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
   const mapping = normalizeMapping(parsed.mapping, inferredMapping);
   const baseRule = createDefaultRuleDsl(mapping, fileType);
   const mode = parsed.mode ?? baseRule.mode;
-  const suggestedRule = mergeTransformConfigs(mergeTransforms(
+  const suggestedRule = ensureMultiSectionMerge(mergeTransformConfigs(mergeTransforms(
     {
       ...baseRule,
       mode,
       mapping,
     },
     parsed.enabledTransforms,
-  ), parsed.transformConfigs);
+  ), parsed.transformConfigs), document.sections.length);
 
   return {
     suggestedRule,

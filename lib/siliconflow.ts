@@ -1,6 +1,6 @@
 const DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1";
 const DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4-Pro";
-const DEFAULT_TIMEOUT_MS = 120000;
+const DEFAULT_TIMEOUT_MS = 360000;
 
 export type SiliconFlowMessage = {
   role: "system" | "user" | "assistant";

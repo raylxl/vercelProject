@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 import {
   createEmptyRow,
   formatIssueLabel,
+  inferMappingFromHeaders,
+  UNIVERSAL_IMPORT_FIELDS,
   type UniversalImportField,
   type UniversalImportMapping,
   type UniversalImportRow,
@@ -70,10 +72,14 @@ type FieldRegexConfig = Partial<Record<UniversalImportField, string>>;
 
 type TextItemConfig = {
   regex?: string;
-  skuCodeGroup?: number;
-  skuNameGroup?: number;
-  skuSpecGroup?: number;
-  skuQuantityGroup?: number;
+  skuCode?: number | string;
+  skuName?: number | string;
+  skuSpec?: number | string;
+  skuQuantity?: number | string;
+  skuCodeGroup?: number | string;
+  skuNameGroup?: number | string;
+  skuSpecGroup?: number | string;
+  skuQuantityGroup?: number | string;
 };
 
 type MatrixPivotConfig = {
@@ -91,6 +97,7 @@ type CardSplitConfig = {
   itemHeaderRegex?: string;
   fieldRegex?: FieldRegexConfig;
   itemColumns?: Partial<Record<UniversalImportField, number>>;
+  excludeRowRegex?: string;
 };
 
 type TextRecordSplitConfig = {
@@ -114,6 +121,10 @@ function splitLines(text: string) {
     .filter(Boolean);
 }
 
+function rowToSearchText(row: string[]) {
+  return row.map((cell) => normalizeCell(cell)).join(" | ");
+}
+
 function normalizeRows(rows: unknown[][]) {
   return rows.filter(isNonEmptyRow).map((row) => row.map((cell) => normalizeCell(cell)));
 }
@@ -132,6 +143,33 @@ function toExternalCodePart(value: string) {
 
 function isPositiveQuantity(value: string) {
   return /^\d+(?:\.\d+)?$/.test(value.trim()) && Number(value) > 0;
+}
+
+function isMetricLikeMatrixHeader(value: string) {
+  return /^(?:\d+(?:\.\d+)?)$/.test(value) || /(合计|结余|库存|数量|在库|可用|冻结|分配|待移入)/.test(value);
+}
+
+function cleanExtractedField(field: UniversalImportField, value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  if (field === "receiverPhone") {
+    return normalized.match(/(?:1\d{10}|(?:0\d{2,3}-?)?\d{7,8})/)?.[0] ?? normalized;
+  }
+
+  const segments = normalized
+    .split("|")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .filter((segment) => !/^[^:：]{1,12}[:：]$/.test(segment));
+
+  if (segments.length > 0) {
+    return segments[0];
+  }
+
+  return normalized === "|" ? "" : normalized;
 }
 
 function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): UniversalImportRow {
@@ -154,14 +192,182 @@ function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isImportField(value: string): value is UniversalImportField {
+  return UNIVERSAL_IMPORT_FIELDS.some((field) => field.key === value);
+}
+
+function normalizeColumnIndex(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return Number(value);
+  }
+
+  return null;
+}
+
+function normalizeFieldColumnMap(value: unknown) {
+  const output: Partial<Record<UniversalImportField, number>> = {};
+
+  if (isRecord(value)) {
+    Object.entries(value).forEach(([field, column]) => {
+      const columnIndex = normalizeColumnIndex(column);
+      if (isImportField(field) && columnIndex !== null) {
+        output[field] = columnIndex;
+      }
+    });
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => {
+      if (!isRecord(item)) {
+        return;
+      }
+
+      const field = String(item.field ?? item.key ?? item.targetField ?? "");
+      const columnIndex = normalizeColumnIndex(item.columnIndex ?? item.column ?? item.index);
+      if (isImportField(field) && columnIndex !== null) {
+        output[field] = columnIndex;
+      }
+    });
+  }
+
+  return output;
+}
+
+function hasAnyColumn(columns: Partial<Record<UniversalImportField, number>>) {
+  return Object.keys(columns).length > 0;
+}
+
+function normalizeFieldRegexMap(value: unknown) {
+  const output: FieldRegexConfig = {};
+
+  if (isRecord(value)) {
+    Object.entries(value).forEach(([field, pattern]) => {
+      if (isImportField(field) && typeof pattern === "string" && pattern.trim()) {
+        output[field] = pattern;
+      }
+    });
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => {
+      if (typeof item === "string") {
+        const namedGroups = Array.from(item.matchAll(/\?<([A-Za-z]\w*)>/g));
+        namedGroups.forEach((match) => {
+          const field = match[1];
+          if (isImportField(field) && !output[field]) {
+            output[field] = item;
+          }
+        });
+        return;
+      }
+
+      if (!isRecord(item)) {
+        return;
+      }
+
+      const field = String(item.field ?? item.key ?? item.targetField ?? "");
+      const pattern = item.regex ?? item.pattern;
+      if (isImportField(field) && typeof pattern === "string" && pattern.trim()) {
+        output[field] = pattern;
+      }
+    });
+  }
+
+  return output;
+}
+
+function normalizeTransformConfig(config: Record<string, unknown> | undefined) {
+  if (!isRecord(config)) {
+    return {};
+  }
+
+  const nested = isRecord(config.config) ? normalizeTransformConfig(config.config) : {};
+  const output: Record<string, unknown> = {};
+
+  Object.entries(config).forEach(([key, value]) => {
+    if (key !== "config" && key !== "type") {
+      output[key] = value;
+    }
+  });
+
+  Object.assign(output, nested);
+
+  if ("fieldColumns" in output) {
+    output.fieldColumns = normalizeFieldColumnMap(output.fieldColumns);
+  }
+
+  if ("rowFieldColumns" in output) {
+    output.rowFieldColumns = normalizeFieldColumnMap(output.rowFieldColumns);
+  }
+
+  if ("itemColumns" in output) {
+    output.itemColumns = normalizeFieldColumnMap(output.itemColumns);
+  }
+
+  if ("fieldRegex" in output) {
+    output.fieldRegex = normalizeFieldRegexMap(output.fieldRegex);
+  }
+
+  if (isRecord(output.item)) {
+    output.item = {
+      ...output.item,
+      skuCodeGroup: output.item.skuCode ?? output.item.skuCodeGroup,
+      skuNameGroup: output.item.skuName ?? output.item.skuNameGroup,
+      skuSpecGroup: output.item.skuSpec ?? output.item.skuSpecGroup,
+      skuQuantityGroup: output.item.skuQuantity ?? output.item.skuQuantityGroup,
+    };
+  }
+
+  return output;
+}
+
+function normalizeRuleDsl(rule: UniversalImportRuleDsl) {
+  return {
+    ...rule,
+    transforms: rule.transforms.map((transform) => ({
+      ...transform,
+      config: normalizeTransformConfig(transform.config),
+    })),
+  } satisfies UniversalImportRuleDsl;
+}
+
 function getTransform(rule: UniversalImportRuleDsl, type: RuleTransformType) {
   return rule.transforms.find((transform) => transform.type === type && transform.enabled);
 }
 
+function getCompositeTransformConfig(rule: UniversalImportRuleDsl, key: string) {
+  const multiSheetTransform = getTransform(rule, "multisheet_merge");
+  const config = multiSheetTransform?.config;
+  if (!isRecord(config)) {
+    return {};
+  }
+
+  return normalizeTransformConfig(config[key] as Record<string, unknown> | undefined);
+}
+
+function getFirstCompositeTransformConfig(rule: UniversalImportRuleDsl, keys: string[]) {
+  for (const key of keys) {
+    const config = getCompositeTransformConfig(rule, key);
+    if (Object.keys(config).length > 0) {
+      return config;
+    }
+  }
+
+  return {};
+}
+
 function getFieldColumns(config: Record<string, unknown> | undefined, rule: UniversalImportRuleDsl) {
-  const configured = config?.fieldColumns;
-  if (configured && typeof configured === "object" && !Array.isArray(configured)) {
-    return configured as Partial<Record<UniversalImportField, number>>;
+  const configured = normalizeFieldColumnMap(config?.fieldColumns);
+  if (hasAnyColumn(configured)) {
+    return configured;
   }
 
   return rule.mapping;
@@ -177,20 +383,132 @@ function createRegex(pattern: string | undefined, flags = "i") {
   }
 
   try {
-    return new RegExp(pattern, flags);
+    const dotAll = pattern.includes("(?s)");
+    const normalizedPattern = pattern.replaceAll("(?s)", "");
+    const normalizedFlags = dotAll && !flags.includes("s") ? `${flags}s` : flags;
+    return new RegExp(normalizedPattern, normalizedFlags);
   } catch {
     return null;
   }
 }
 
+function createRelaxedKeyValueRegex(pattern: string | undefined, flags = "i") {
+  if (!pattern) {
+    return null;
+  }
+
+  const relaxedPattern = pattern
+    .replaceAll("[:：]\\s*", "(?:[:：|])\\s*")
+    .replaceAll("[:：]", "(?:[:：|])")
+    .replace(/\\s\+/g, "\\s*(?:\\|\\s*)?");
+
+  return createRegex(relaxedPattern, flags);
+}
+
+function regexMatchesText(pattern: string | undefined, text: string) {
+  const regex = createRegex(pattern, "i");
+  if (regex?.test(text)) {
+    return true;
+  }
+
+  return Boolean(createRelaxedKeyValueRegex(pattern, "i")?.test(text));
+}
+
 function extractTextField(text: string, pattern: string | undefined) {
-  const regex = createRegex(pattern, "im");
+  const regex = createRegex(pattern, "im") ?? createRelaxedKeyValueRegex(pattern, "im");
   if (!regex) {
     return "";
   }
 
-  const match = text.match(regex);
-  return match?.[1]?.replace(/\s+/g, " ").trim() ?? "";
+  let match = text.match(regex);
+  if (!match) {
+    match = text.match(createRelaxedKeyValueRegex(pattern, "im") ?? regex);
+  }
+
+  if (!match) {
+    return "";
+  }
+
+  const namedField = match.groups ? Object.values(match.groups).find(Boolean) : "";
+  return (namedField || match[1] || "").replace(/\s+/g, " ").trim();
+}
+
+function extractFieldsByRegex(text: string, fieldRegex: unknown) {
+  const output: Partial<Record<UniversalImportField, string>> = {};
+  const normalized = normalizeFieldRegexMap(fieldRegex);
+
+  (Object.keys(normalized) as UniversalImportField[]).forEach((field) => {
+    const regex = createRegex(normalized[field], "im") ?? createRelaxedKeyValueRegex(normalized[field], "im");
+    if (!regex) {
+      return;
+    }
+
+    let match = text.match(regex);
+    if (!match) {
+      match = text.match(createRelaxedKeyValueRegex(normalized[field], "im") ?? regex);
+    }
+
+    if (!match) {
+      return;
+    }
+
+    output[field] = cleanExtractedField(
+      field,
+      match.groups?.[field]?.replace(/\s+/g, " ").trim() ?? extractTextField(text, normalized[field]),
+    );
+  });
+
+  return output;
+}
+
+function extractLeadingLiteral(pattern: string | undefined) {
+  if (!pattern) {
+    return "";
+  }
+
+  const index = pattern.search(/(?:\[:：\]|\\s|\(|\[|\.|\*|\+|\?|\^|\$|\|)/);
+  return pattern
+    .slice(0, index >= 0 ? index : pattern.length)
+    .replace(/\\/g, "")
+    .trim();
+}
+
+function isWeakExtractedValue(value: string | undefined) {
+  return !value || value === "|" || /^[\s|]+$/.test(value);
+}
+
+function extractAdjacentKeyValueFields(
+  section: ParsedDocument["sections"][number],
+  fieldRegex: unknown,
+  current: Partial<Record<UniversalImportField, string>>,
+) {
+  const normalized = normalizeFieldRegexMap(fieldRegex);
+
+  (Object.keys(normalized) as UniversalImportField[]).forEach((field) => {
+    if (!isWeakExtractedValue(current[field])) {
+      return;
+    }
+
+    const label = extractLeadingLiteral(normalized[field]);
+    if (!label) {
+      return;
+    }
+
+    for (const row of section.rows) {
+      const labelIndex = row.findIndex((cell) => normalizeCell(cell).replace(/[:：]$/, "") === label);
+      if (labelIndex < 0) {
+        continue;
+      }
+
+      const value = row.slice(labelIndex + 1).map((cell) => normalizeCell(cell)).find(Boolean);
+      if (value) {
+        current[field] = cleanExtractedField(field, value);
+        return;
+      }
+    }
+  });
+
+  return current;
 }
 
 function interpolate(template: string | undefined, values: Record<string, string>) {
@@ -355,14 +673,15 @@ function findConfiguredHeaderIndex(rows: string[][], config: Record<string, unkn
   return 0;
 }
 
-function extractTailFields(section: ParsedDocument["sections"][number], config: Record<string, unknown> | undefined) {
-  const fieldRegex = (config?.fieldRegex ?? {}) as FieldRegexConfig;
-  const output: Partial<Record<UniversalImportField, string>> = {};
-  const text = section.text;
-
-  (Object.keys(fieldRegex) as UniversalImportField[]).forEach((field) => {
-    output[field] = extractTextField(text, fieldRegex[field]);
-  });
+function extractTailFields(
+  document: ParsedDocument,
+  section: ParsedDocument["sections"][number],
+  config: Record<string, unknown> | undefined,
+) {
+  const source = asString(config?.source || config?.scope, "section_text");
+  const text = source === "full_text" || source === "document" ? document.textContent : section.text;
+  const output: Partial<Record<UniversalImportField, string>> = extractFieldsByRegex(text, config?.fieldRegex);
+  extractAdjacentKeyValueFields(section, config?.fieldRegex, output);
 
   const keyValueLabels = config?.keyValueLabels;
   if (keyValueLabels && typeof keyValueLabels === "object" && !Array.isArray(keyValueLabels)) {
@@ -429,11 +748,33 @@ function parseRowsByMapping(
 function parseMatrix(section: ParsedDocument["sections"][number], config: MatrixPivotConfig, rowOffset: number) {
   const rows = section.rows;
   const headerRowIndex = asNumber(config.headerRowIndex, 0);
+  const headerRowCandidates = headerRowIndex > 0 ? [headerRowIndex, headerRowIndex - 1] : [headerRowIndex];
+  const output: UniversalImportRow[] = [];
+
+  for (const candidateHeaderRowIndex of headerRowCandidates) {
+    const candidateRows = parseMatrixWithHeader(section, config, rowOffset, candidateHeaderRowIndex);
+    if (candidateRows.length > 0) {
+      return candidateRows;
+    }
+  }
+
+  return output;
+}
+
+function parseMatrixWithHeader(
+  section: ParsedDocument["sections"][number],
+  config: MatrixPivotConfig,
+  rowOffset: number,
+  headerRowIndex: number,
+) {
+  const rows = section.rows;
   const header = rows[headerRowIndex] ?? [];
   const dataStart = asNumber(config.dataStartRowIndex, headerRowIndex + 1);
   const matrixStart = asNumber(config.matrixStartColumn, 0);
   const matrixEnd = asNumber(config.matrixEndColumn, header.length - 1);
-  const rowColumns = config.rowFieldColumns ?? {};
+  const configuredRowColumns = normalizeFieldColumnMap(config.rowFieldColumns);
+  const inferredRowColumns = inferMappingFromHeaders(header);
+  const rowColumns = hasAnyColumn(configuredRowColumns) ? configuredRowColumns : inferredRowColumns;
   const excludeRegex = createRegex(config.excludeHeaderRegex, "i");
   const output: UniversalImportRow[] = [];
 
@@ -446,7 +787,7 @@ function parseMatrix(section: ParsedDocument["sections"][number], config: Matrix
     for (let columnIndex = matrixStart; columnIndex <= matrixEnd; columnIndex += 1) {
       const receiverStore = normalizeCell(header[columnIndex]);
       const quantity = normalizeCell(sourceRow[columnIndex]);
-      if (!receiverStore || excludeRegex?.test(receiverStore) || !isPositiveQuantity(quantity)) {
+      if (!receiverStore || isMetricLikeMatrixHeader(receiverStore) || excludeRegex?.test(receiverStore) || !isPositiveQuantity(quantity)) {
         continue;
       }
 
@@ -469,7 +810,20 @@ function parseMatrix(section: ParsedDocument["sections"][number], config: Matrix
   return output;
 }
 
-function parseTextItems(text: string, itemConfig: TextItemConfig | undefined, baseValues: Partial<Record<UniversalImportField, string>>, rowOffset: number) {
+function getCapture(match: RegExpExecArray, group: number | string | undefined, fallbackGroup: number) {
+  if (typeof group === "string") {
+    return match.groups?.[group] ?? "";
+  }
+
+  return match[asNumber(group, fallbackGroup)] ?? "";
+}
+
+function parseTextItems(
+  text: string,
+  itemConfig: TextItemConfig | undefined,
+  baseValues: Partial<Record<UniversalImportField, string>>,
+  rowOffset: number,
+) {
   const regex = createRegex(itemConfig?.regex, "gim");
   if (!regex) {
     return [];
@@ -483,10 +837,10 @@ function parseTextItems(text: string, itemConfig: TextItemConfig | undefined, ba
       rowFromValues(
         {
           ...baseValues,
-          skuCode: match[asNumber(itemConfig?.skuCodeGroup, 1)] ?? "",
-          skuName: match[asNumber(itemConfig?.skuNameGroup, 2)] ?? "",
-          skuSpec: match[asNumber(itemConfig?.skuSpecGroup, 3)] ?? "",
-          skuQuantity: match[asNumber(itemConfig?.skuQuantityGroup, 4)] ?? "",
+          skuCode: getCapture(match, itemConfig?.skuCodeGroup, 1),
+          skuName: getCapture(match, itemConfig?.skuNameGroup, 2),
+          skuSpec: getCapture(match, itemConfig?.skuSpecGroup, 3),
+          skuQuantity: getCapture(match, itemConfig?.skuQuantityGroup, 4),
         },
         rowOffset + output.length + 1,
       ),
@@ -505,7 +859,7 @@ function parseCards(section: ParsedDocument["sections"][number], config: CardSpl
   const cards: string[][][] = [];
   let current: string[][] = [];
   section.rows.forEach((row) => {
-    if (startRegex.test(row.join(" "))) {
+    if (regexMatchesText(config.startRegex, rowToSearchText(row))) {
       if (current.length > 0) {
         cards.push(current);
       }
@@ -522,25 +876,43 @@ function parseCards(section: ParsedDocument["sections"][number], config: CardSpl
   const itemHeaderRegex = createRegex(config.itemHeaderRegex, "i");
 
   cards.forEach((card, cardIndex) => {
-    const text = card.map((row) => row.join(" | ")).join("\n");
+    const text = card.map((row) => rowToSearchText(row)).join("\n");
     const baseValues: Partial<Record<UniversalImportField, string>> = {
       externalCode: ensureUniqueExternalCode("CARD", cardIndex),
     };
 
-    (Object.keys(config.fieldRegex ?? {}) as UniversalImportField[]).forEach((field) => {
-      baseValues[field] = extractTextField(text, config.fieldRegex?.[field]);
-    });
+    Object.assign(baseValues, extractFieldsByRegex(text, config.fieldRegex));
+    extractAdjacentKeyValueFields(
+      {
+        title: `card-${cardIndex + 1}`,
+        rows: card,
+        text,
+      },
+      config.fieldRegex,
+      baseValues,
+    );
 
-    const itemHeaderIndex = itemHeaderRegex ? card.findIndex((row) => itemHeaderRegex.test(row.join(" "))) : -1;
-    const itemColumns = config.itemColumns ?? {};
+    const itemHeaderIndex = itemHeaderRegex ? card.findIndex((row) => regexMatchesText(config.itemHeaderRegex, rowToSearchText(row))) : -1;
+    const itemColumns = normalizeFieldColumnMap(config.itemColumns);
+    const excludeRowRegex = createRegex(config.excludeRowRegex, "i");
 
     if (itemHeaderIndex < 0) {
       return;
     }
 
     card.slice(itemHeaderIndex + 1).forEach((itemRow) => {
+      if (excludeRowRegex?.test(rowToSearchText(itemRow))) {
+        return;
+      }
+
       const quantity = getColumnValue(itemRow, itemColumns.skuQuantity);
+      const skuCode = getColumnValue(itemRow, itemColumns.skuCode);
+      const skuName = getColumnValue(itemRow, itemColumns.skuName);
       if (!isPositiveQuantity(quantity)) {
+        return;
+      }
+
+      if (!skuCode || !skuName) {
         return;
       }
 
@@ -548,8 +920,8 @@ function parseCards(section: ParsedDocument["sections"][number], config: CardSpl
         rowFromValues(
           {
             ...baseValues,
-            skuCode: getColumnValue(itemRow, itemColumns.skuCode),
-            skuName: getColumnValue(itemRow, itemColumns.skuName),
+            skuCode,
+            skuName,
             skuSpec: getColumnValue(itemRow, itemColumns.skuSpec),
             skuQuantity: quantity,
           },
@@ -562,25 +934,30 @@ function parseCards(section: ParsedDocument["sections"][number], config: CardSpl
   return output;
 }
 
-function parseTextRecords(document: ParsedDocument, config: TextRecordSplitConfig, rowOffset: number) {
+function parseTextRecords(
+  document: ParsedDocument,
+  config: TextRecordSplitConfig,
+  rowOffset: number,
+  globalBaseValues: Partial<Record<UniversalImportField, string>> = {},
+) {
   const separator = createRegex(config.recordSeparatorRegex, "im");
   const chunks = separator ? document.textContent.split(separator).filter((chunk) => chunk.trim()) : [document.textContent];
   const output: UniversalImportRow[] = [];
 
   chunks.forEach((chunk, index) => {
     const baseValues: Partial<Record<UniversalImportField, string>> = {
-      externalCode: ensureUniqueExternalCode("TXT", index),
+      ...globalBaseValues,
+      externalCode: globalBaseValues.externalCode || ensureUniqueExternalCode("TXT", index),
     };
-    (Object.keys(config.fieldRegex ?? {}) as UniversalImportField[]).forEach((field) => {
-      baseValues[field] = extractTextField(chunk, config.fieldRegex?.[field]);
-    });
+    Object.assign(baseValues, extractFieldsByRegex(chunk, config.fieldRegex));
     output.push(...parseTextItems(chunk, config.item, baseValues, rowOffset + output.length));
   });
 
   return output;
 }
 
-function executeConfiguredRule(document: ParsedDocument, rule: UniversalImportRuleDsl) {
+function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImportRuleDsl) {
+  const rule = normalizeRuleDsl(rawRule);
   const rows: UniversalImportRow[] = [];
   const summaries: string[] = [];
   const headerTransform = getTransform(rule, "header_mapping");
@@ -590,14 +967,25 @@ function executeConfiguredRule(document: ParsedDocument, rule: UniversalImportRu
   const textTransform = getTransform(rule, "text_record_split");
   const useAllSheets = Boolean(getTransform(rule, "multisheet_merge"));
   const sections = useAllSheets ? document.sections : document.sections.slice(0, 1);
+  const compositeHeaderConfig = getFirstCompositeTransformConfig(rule, ["headerMapping", "header_mapping"]);
+  const compositeTailConfig = getFirstCompositeTransformConfig(rule, ["tailTextExtract", "tail_text_extract"]);
+  const effectiveHeaderConfig = headerTransform?.config ?? compositeHeaderConfig;
+  const effectiveTailConfig = tailTransform?.config ?? compositeTailConfig;
+  const hasEffectiveHeader = headerTransform || Object.keys(compositeHeaderConfig).length > 0;
+  const hasEffectiveTail = tailTransform || Object.keys(compositeTailConfig).length > 0;
+  const globalTailValues = hasEffectiveTail ? extractTailFields(document, document.sections[0] ?? {
+    title: "document",
+    rows: [],
+    text: document.textContent,
+  }, effectiveTailConfig) : {};
 
   if (textTransform) {
-    rows.push(...parseTextRecords(document, textTransform.config as TextRecordSplitConfig, rows.length));
+    rows.push(...parseTextRecords(document, textTransform.config as TextRecordSplitConfig, rows.length, globalTailValues));
     summaries.push("rule:text_record_split");
   }
 
   sections.forEach((section) => {
-    const tailValues = tailTransform ? extractTailFields(section, tailTransform.config) : {};
+    const tailValues = hasEffectiveTail ? extractTailFields(document, section, effectiveTailConfig) : {};
 
     if (cardTransform) {
       rows.push(...parseCards(section, cardTransform.config as CardSplitConfig, rows.length));
@@ -609,8 +997,8 @@ function executeConfiguredRule(document: ParsedDocument, rule: UniversalImportRu
       summaries.push(`rule:matrix_pivot:${section.title}`);
     }
 
-    if (headerTransform) {
-      rows.push(...parseRowsByMapping(section, rule, headerTransform.config, tailValues, rows.length));
+    if (hasEffectiveHeader && (!matrixTransform || Boolean(effectiveHeaderConfig?.emitWithMatrix))) {
+      rows.push(...parseRowsByMapping(section, rule, effectiveHeaderConfig, tailValues, rows.length));
       summaries.push(`rule:header_mapping:${section.title}`);
     }
   });
@@ -623,7 +1011,7 @@ function executeConfiguredRule(document: ParsedDocument, rule: UniversalImportRu
       skuSpecGroup: 3,
       skuQuantityGroup: 4,
     };
-    rows.push(...parseTextItems(document.textContent, fallbackItemConfig, {}, 0));
+    rows.push(...parseTextItems(document.textContent, fallbackItemConfig, globalTailValues, 0));
     summaries.push("rule:text_fallback");
   }
 
