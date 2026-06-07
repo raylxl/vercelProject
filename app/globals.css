@@ -631,6 +631,7 @@ code {
 .search-field input,
 .search-field select,
 .mapping-row select,
+.mapping-default-input,
 .form-field input,
 .form-field select,
 .form-field textarea,
@@ -651,6 +652,7 @@ code {
 .search-field input:focus,
 .search-field select:focus,
 .mapping-row select:focus,
+.mapping-default-input:focus,
 .form-field input:focus,
 .form-field select:focus,
 .form-field textarea:focus,
@@ -1304,6 +1306,11 @@ code {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.mapping-default-input {
+  min-height: 36px;
+  background: #fbfeff;
 }
 
 .ai-confidence-badge {

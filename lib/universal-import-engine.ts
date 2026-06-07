@@ -43,6 +43,7 @@ export type RuleTransformType =
 export type UniversalImportRuleDsl = {
   fileType: SupportedImportFileType;
   mode: "mapping" | "text" | "structured";
+  defaults?: Partial<Record<UniversalImportField, string>>;
   transforms: Array<{
     type: RuleTransformType;
     enabled: boolean;
@@ -1446,6 +1447,23 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
     summaries.push("rule:group_by_external_code");
   }
 
+  const configuredDefaults = isRecord(rule.defaults)
+    ? (Object.keys(rule.defaults) as UniversalImportField[]).filter((field) => normalizeCell(rule.defaults?.[field]))
+    : [];
+
+  if (configuredDefaults.length > 0) {
+    rows.forEach((row) => {
+      configuredDefaults.forEach((field) => {
+        const rawValue = normalizeCell(rule.defaults?.[field]);
+        const value = field === "weight" || field === "skuQuantity" ? normalizeNumericImportValue(rawValue) : rawValue;
+        if (value && !normalizeCell(row[field])) {
+          row[field] = value;
+        }
+      });
+    });
+    summaries.push("rule:defaults");
+  }
+
   return {
     rows,
     summary: summaries.length ? summaries : ["rule:no_rows"],
@@ -1476,6 +1494,7 @@ export function createDefaultRuleDsl(mapping: UniversalImportMapping, fileType: 
   return {
     fileType,
     mode: fileType === "excel" ? "structured" : "text",
+    defaults: {},
     mapping,
     transforms: commonTransforms,
   };

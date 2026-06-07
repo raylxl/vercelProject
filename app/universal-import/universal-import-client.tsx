@@ -541,8 +541,9 @@ function buildColumnOptionsFromDocument(document: RuleTestResponse["document"], 
   const rows = document.sections[0]?.rows ?? [];
   const headerRowIndex = getRuleHeaderRowIndex(rule);
   const headers = rows[headerRowIndex] ?? document.headers ?? [];
-  const maxColumnCount = rows.reduce((max, row) => Math.max(max, row.length), headers.length);
-  const sampleRows = rows.slice(headerRowIndex + 1, headerRowIndex + 8);
+  const allRows = document.sections.flatMap((section) => section.rows);
+  const maxColumnCount = allRows.reduce((max, row) => Math.max(max, row.length), headers.length);
+  const sampleRows = allRows.filter((_, index) => index !== headerRowIndex);
 
   return Array.from({ length: maxColumnCount }, (_, index) => ({
     index,
@@ -550,13 +551,17 @@ function buildColumnOptionsFromDocument(document: RuleTestResponse["document"], 
     samples: sampleRows
       .map((row) => row[index])
       .filter((value): value is string => Boolean(value?.trim()))
-      .slice(0, 3),
+      .filter((value, valueIndex, list) => list.indexOf(value) === valueIndex)
+      .slice(0, 8),
   }));
 }
 
 function formatColumnOption(option: ColumnOption) {
   const header = option.header || "未命名列";
-  const samples = option.samples.length > 0 ? `｜样例：${option.samples.join(" / ")}` : "";
+  const visibleSamples = option.samples.slice(0, 4);
+  const samples = visibleSamples.length > 0
+    ? `｜样例：${visibleSamples.join(" / ")}${option.samples.length > visibleSamples.length ? " ..." : ""}`
+    : "";
   return `${option.index + 1}. ${header}${samples}`;
 }
 
@@ -564,6 +569,7 @@ function buildDefaultRuleDsl(mapping: UniversalImportMapping, fileType: Supporte
   return {
     fileType,
     mode: fileType === "excel" ? "structured" : "text",
+    defaults: {},
     mapping,
     transforms: [
       {
@@ -722,6 +728,30 @@ function getMappingSelectValue(
   }
 
   return getTailSourceOption(rule, field)?.value ?? "";
+}
+
+function getRuleDefaultValue(rule: UniversalImportRuleDsl, field: UniversalImportField) {
+  return String(rule.defaults?.[field] ?? "");
+}
+
+function updateRuleDefaultValue(
+  rule: UniversalImportRuleDsl,
+  field: UniversalImportField,
+  value: string,
+) {
+  const defaults = { ...(rule.defaults ?? {}) } as Partial<Record<UniversalImportField, string>>;
+  const normalizedValue = value.trim();
+
+  if (normalizedValue) {
+    defaults[field] = normalizedValue;
+  } else {
+    delete defaults[field];
+  }
+
+  return {
+    ...rule,
+    defaults,
+  };
 }
 
 function updateTailSourceField(
@@ -1069,6 +1099,11 @@ export function UniversalImportClient({
     setRuleStatus("映射列已更新，请确认后保存规则。");
   }
 
+  function handleDefaultValueChange(field: UniversalImportField, value: string) {
+    setRuleDsl((current) => updateRuleDefaultValue(current, field, value));
+    setRuleStatus(value.trim() ? "默认值已更新，试解析时会补齐空字段。" : "默认值已清空。");
+  }
+
   function handleTransformConfigDraftChange(transformType: RuleTransformType, value: string) {
     setTransformConfigDrafts((current) => ({
       ...current,
@@ -1128,6 +1163,7 @@ export function UniversalImportClient({
     return {
       ...nextRuleDsl,
       aiConfidenceReport,
+      defaults: nextRuleDsl.defaults ?? {},
       transforms,
     };
   }
@@ -2343,6 +2379,7 @@ export function UniversalImportClient({
                           const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
                           const currentColumn = mapping[field.key];
                           const tailSourceOption = getTailSourceOption(ruleDsl, field.key);
+                          const defaultValue = getRuleDefaultValue(ruleDsl, field.key);
 
                           return (
                             <label className="mapping-row" key={field.key}>
@@ -2366,7 +2403,15 @@ export function UniversalImportClient({
                                   </option>
                                 ) : null}
                               </select>
-                              <small className="mapping-hint">{aiStatus.detail}</small>
+                              <input
+                                className="mapping-default-input"
+                                value={defaultValue}
+                                onChange={(event) => handleDefaultValueChange(field.key, event.target.value)}
+                                placeholder={field.key === "temperatureZone" ? "默认值，如：常温" : "默认值：文件无此字段时补齐"}
+                              />
+                              <small className="mapping-hint">
+                                {aiStatus.detail}；下拉用于选择表格列/尾部信息，默认值会补齐空字段。
+                              </small>
                             </label>
                           );
                         })}
@@ -3054,6 +3099,7 @@ export function UniversalImportClient({
                             const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
                             const currentColumn = mapping[field.key];
                             const tailSourceOption = getTailSourceOption(ruleDsl, field.key);
+                            const defaultValue = getRuleDefaultValue(ruleDsl, field.key);
 
                             return (
                               <label className="mapping-row" key={field.key}>
@@ -3077,7 +3123,15 @@ export function UniversalImportClient({
                                     </option>
                                   ) : null}
                                 </select>
-                                <small className="mapping-hint">{aiStatus.detail}</small>
+                                <input
+                                  className="mapping-default-input"
+                                  value={defaultValue}
+                                  onChange={(event) => handleDefaultValueChange(field.key, event.target.value)}
+                                  placeholder={field.key === "temperatureZone" ? "默认值，如：常温" : "默认值：文件无此字段时补齐"}
+                                />
+                                <small className="mapping-hint">
+                                  {aiStatus.detail}；下拉用于选择表格列/尾部信息，默认值会补齐空字段。
+                                </small>
                               </label>
                             );
                           })}

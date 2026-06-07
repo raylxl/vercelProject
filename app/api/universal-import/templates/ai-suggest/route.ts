@@ -204,8 +204,9 @@ function getRecommendedHeaderRowIndex(document: Awaited<ReturnType<typeof parseI
 function buildColumnOptions(document: Awaited<ReturnType<typeof parseImportDocument>>, headerRowIndex: number) {
   const rows = document.sections[0]?.rows ?? [];
   const headers = rows[headerRowIndex] ?? document.headers ?? [];
-  const maxColumnCount = rows.reduce((max, row) => Math.max(max, row.length), headers.length);
-  const sampleRows = rows.slice(headerRowIndex + 1, headerRowIndex + 8);
+  const allRows = document.sections.flatMap((section) => section.rows);
+  const maxColumnCount = allRows.reduce((max, row) => Math.max(max, row.length), headers.length);
+  const sampleRows = allRows.filter((row, index) => index !== headerRowIndex);
 
   return Array.from({ length: maxColumnCount }, (_, index) => ({
     index,
@@ -213,7 +214,8 @@ function buildColumnOptions(document: Awaited<ReturnType<typeof parseImportDocum
     samples: sampleRows
       .map((row) => row[index])
       .filter((value): value is string => Boolean(value?.trim()))
-      .slice(0, 3),
+      .filter((value, valueIndex, list) => list.indexOf(value) === valueIndex)
+      .slice(0, 8),
   }));
 }
 
