@@ -146,6 +146,7 @@ type AiSuggestResponse = {
     headers: string[];
     headerRowIndex?: number;
     columnOptions?: ColumnOption[];
+    tailSourceOptions?: Partial<Record<UniversalImportField, string[]>>;
     rowCount: number;
     sectionCount: number;
   };
@@ -712,6 +713,30 @@ function getTailSourceOption(rule: UniversalImportRuleDsl, field: UniversalImpor
   };
 }
 
+function getAvailableTailSourceOptions(
+  rule: UniversalImportRuleDsl,
+  field: UniversalImportField,
+  discoveredTailSources: Partial<Record<UniversalImportField, string[]>>,
+) {
+  const configured = getTailSourceOption(rule, field);
+  const discoveredLabels = normalizeTailLabels(discoveredTailSources[field]);
+  const options = new Map<string, TailSourceOption>();
+
+  if (configured) {
+    options.set(configured.value, configured);
+  }
+
+  if (discoveredLabels.length > 0) {
+    const discovered = {
+      value: encodeTailSourceValue(discoveredLabels),
+      labels: discoveredLabels,
+    };
+    options.set(discovered.value, discovered);
+  }
+
+  return Array.from(options.values());
+}
+
 function getTailSourceOptionLabel(option: TailSourceOption) {
   return `尾部信息提取：${option.labels.join(" / ")}`;
 }
@@ -910,6 +935,7 @@ export function UniversalImportClient({
   const [fingerprint, setFingerprint] = useState("");
   const [headers, setHeaders] = useState<string[]>([]);
   const [columnOptions, setColumnOptions] = useState<ColumnOption[]>([]);
+  const [tailSourceOptions, setTailSourceOptions] = useState<Partial<Record<UniversalImportField, string[]>>>({});
   const [draftRows, setDraftRows] = useState<DraftRow[]>([]);
   const [mapping, setMapping] = useState<UniversalImportMapping>(DEFAULT_MAPPING);
   const [ruleDsl, setRuleDsl] = useState<UniversalImportRuleDsl>(buildDefaultRuleDsl(DEFAULT_MAPPING, "excel"));
@@ -1346,6 +1372,7 @@ export function UniversalImportClient({
     setSelectedIds([]);
     setHeaders([]);
     setColumnOptions([]);
+    setTailSourceOptions({});
     setFingerprint("");
     setRuleTestSummary("");
     setAiSummary("");
@@ -1377,6 +1404,7 @@ export function UniversalImportClient({
       setRuleNameInput("");
       setAiRiskNotes([]);
       setAiConfidenceReport([]);
+      setTailSourceOptions({});
       setAiProviderLabel("");
       setAiModelLabel("");
       setTemplateInfo("请先手动选择解析规则，不做自动匹配。");
@@ -1405,6 +1433,7 @@ export function UniversalImportClient({
     setSelectedIds([]);
     setHeaders([]);
     setColumnOptions([]);
+    setTailSourceOptions({});
     setFingerprint("");
     setRuleTestSummary("");
     setTransformConfigDrafts({});
@@ -1565,6 +1594,7 @@ export function UniversalImportClient({
         : toColumnOptions(data.documentSummary.headers);
       setHeaders(nextColumnOptions.map((option) => option.header));
       setColumnOptions(nextColumnOptions);
+      setTailSourceOptions(data.documentSummary.tailSourceOptions ?? {});
       setSheetName(data.documentSummary.sheetName);
       setAiRiskNotes(data.riskNotes ?? []);
       setAiConfidenceReport(data.confidenceReport ?? []);
@@ -2376,7 +2406,7 @@ export function UniversalImportClient({
                         {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                           const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
                           const currentColumn = mapping[field.key];
-                          const tailSourceOption = getTailSourceOption(ruleDsl, field.key);
+                          const availableTailSourceOptions = getAvailableTailSourceOptions(ruleDsl, field.key, tailSourceOptions);
                           const defaultValue = getRuleDefaultValue(ruleDsl, field.key);
 
                           return (
@@ -2395,11 +2425,11 @@ export function UniversalImportClient({
                                     {formatColumnOption(option)}
                                   </option>
                                 ))}
-                                {tailSourceOption ? (
-                                  <option value={tailSourceOption.value}>
-                                    {getTailSourceOptionLabel(tailSourceOption)}
+                                {availableTailSourceOptions.map((option) => (
+                                  <option value={option.value} key={option.value}>
+                                    {getTailSourceOptionLabel(option)}
                                   </option>
-                                ) : null}
+                                ))}
                               </select>
                               <input
                                 className="mapping-default-input"
@@ -3102,7 +3132,7 @@ export function UniversalImportClient({
                           {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                             const aiStatus = getAiMappingStatus(aiConfidenceByField.get(field.key));
                             const currentColumn = mapping[field.key];
-                            const tailSourceOption = getTailSourceOption(ruleDsl, field.key);
+                            const availableTailSourceOptions = getAvailableTailSourceOptions(ruleDsl, field.key, tailSourceOptions);
                             const defaultValue = getRuleDefaultValue(ruleDsl, field.key);
 
                             return (
@@ -3121,11 +3151,11 @@ export function UniversalImportClient({
                                       {formatColumnOption(option)}
                                     </option>
                                   ))}
-                                  {tailSourceOption ? (
-                                    <option value={tailSourceOption.value}>
-                                      {getTailSourceOptionLabel(tailSourceOption)}
+                                  {availableTailSourceOptions.map((option) => (
+                                    <option value={option.value} key={option.value}>
+                                      {getTailSourceOptionLabel(option)}
                                     </option>
-                                  ) : null}
+                                  ))}
                                 </select>
                                 <input
                                   className="mapping-default-input"

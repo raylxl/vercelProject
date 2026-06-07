@@ -52,6 +52,7 @@ type AiSuggestSuccessResponse = {
       header: string;
       samples: string[];
     }>;
+    tailSourceOptions: Partial<Record<UniversalImportField, string[]>>;
     rowCount: number;
     sectionCount: number;
     textPreview: string;
@@ -226,6 +227,7 @@ function buildDocumentSummary(
 ) {
   const headerRowIndex = getRecommendedHeaderRowIndex(document, rule);
   const columnOptions = buildColumnOptions(document, headerRowIndex);
+  const tailSourceOptions = inferKeyValueExtractionConfig(document)?.config.keyValueLabels ?? {};
 
   return {
     fileType,
@@ -233,6 +235,7 @@ function buildDocumentSummary(
     headers: columnOptions.map((option) => option.header),
     headerRowIndex,
     columnOptions,
+    tailSourceOptions: tailSourceOptions as Partial<Record<UniversalImportField, string[]>>,
     rowCount: document.rawRows.length,
     sectionCount: document.sections.length,
     textPreview: document.textContent.slice(0, 800),
@@ -549,9 +552,16 @@ function hasNearbyValue(row: string[], cellIndex: number) {
     return true;
   }
 
-  return row
-    .slice(cellIndex + 1, Math.min(row.length, cellIndex + 5))
-    .some((cell) => Boolean(String(cell ?? "").trim()));
+  for (let currentIndex = cellIndex + 1; currentIndex < Math.min(row.length, cellIndex + 8); currentIndex += 1) {
+    const value = String(row[currentIndex] ?? "").trim();
+    if (!value || isLikelyKeyValueLabel(value)) {
+      continue;
+    }
+
+    return true;
+  }
+
+  return false;
 }
 
 function isLikelyKeyValueLabel(value: unknown) {
@@ -586,47 +596,52 @@ function isDenseTableHeaderRow(row: string[]) {
 }
 
 function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parseImportDocument>>) {
-  const firstSection = document.sections[0];
-  const rows = firstSection?.rows ?? [];
   const labels: Partial<Record<UniversalImportField, string[]>> = {};
   const matchedRowIndexes = new Set<number>();
+  let rowOffset = 0;
 
-  rows.forEach((row, rowIndex) => {
-    if (isDenseTableHeaderRow(row)) {
-      return;
-    }
+  document.sections.forEach((section) => {
+    const rows = section.rows ?? [];
 
-    row.forEach((cell, cellIndex) => {
-      const inlineKeyValue = parseInlineKeyValueCell(cell);
-      const normalizedCell = normalizeHeaderText(inlineKeyValue?.label ?? normalizeKeyValueLabel(cell));
-      if (!normalizedCell || !hasNearbyValue(row, cellIndex)) {
+    rows.forEach((row, rowIndex) => {
+      if (isDenseTableHeaderRow(row)) {
         return;
       }
 
-      (Object.keys(KEY_VALUE_FIELD_ALIASES) as UniversalImportField[]).forEach((field) => {
-        const aliases = KEY_VALUE_FIELD_ALIASES[field];
-        if (aliases.length === 0) {
+      row.forEach((cell, cellIndex) => {
+        const inlineKeyValue = parseInlineKeyValueCell(cell);
+        const normalizedCell = normalizeHeaderText(inlineKeyValue?.label ?? normalizeKeyValueLabel(cell));
+        if (!normalizedCell || !hasNearbyValue(row, cellIndex)) {
           return;
         }
 
-        const matched = aliases.some((alias) => {
-          const normalizedAlias = normalizeHeaderText(alias);
-          return normalizedAlias && normalizedCell === normalizedAlias;
+        (Object.keys(KEY_VALUE_FIELD_ALIASES) as UniversalImportField[]).forEach((field) => {
+          const aliases = KEY_VALUE_FIELD_ALIASES[field];
+          if (aliases.length === 0) {
+            return;
+          }
+
+          const matched = aliases.some((alias) => {
+            const normalizedAlias = normalizeHeaderText(alias);
+            return normalizedAlias && normalizedCell === normalizedAlias;
+          });
+
+          if (!matched) {
+            return;
+          }
+
+          const exactLabel = inlineKeyValue?.label ?? normalizeKeyValueLabel(cell);
+          if (!exactLabel) {
+            return;
+          }
+
+          labels[field] = Array.from(new Set([...(labels[field] ?? []), exactLabel]));
+          matchedRowIndexes.add(rowOffset + rowIndex);
         });
-
-        if (!matched) {
-          return;
-        }
-
-        const exactLabel = inlineKeyValue?.label ?? normalizeKeyValueLabel(cell);
-        if (!exactLabel) {
-          return;
-        }
-
-        labels[field] = Array.from(new Set([...(labels[field] ?? []), exactLabel]));
-        matchedRowIndexes.add(rowIndex);
       });
     });
+
+    rowOffset += rows.length;
   });
 
   const matchedFields = (Object.keys(labels) as UniversalImportField[]).filter((field) => (labels[field]?.length ?? 0) > 0);

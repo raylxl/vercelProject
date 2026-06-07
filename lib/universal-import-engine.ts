@@ -260,10 +260,16 @@ function isLikelyKeyValueLabel(value: unknown) {
 }
 
 function findAdjacentKeyValue(row: string[], index: number) {
-  return row
-    .slice(index + 1, Math.min(row.length, index + 5))
-    .map((value) => normalizeCell(value))
-    .find((value) => value && !isLikelyKeyValueLabel(value)) ?? "";
+  for (let currentIndex = index + 1; currentIndex < Math.min(row.length, index + 8); currentIndex += 1) {
+    const value = normalizeCell(row[currentIndex]);
+    if (!value || isLikelyKeyValueLabel(value)) {
+      continue;
+    }
+
+    return value;
+  }
+
+  return "";
 }
 
 function isDenseTableHeaderRow(row: string[]) {
