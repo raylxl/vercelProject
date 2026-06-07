@@ -255,6 +255,27 @@ function cleanExtractedField(field: UniversalImportField, value: string) {
   return normalized === "|" ? "" : normalized;
 }
 
+function parseInlineKeyValueCell(value: unknown) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/^(.{1,24}?)[：:]\s*(.+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const label = String(match[1] ?? "")
+    .replace(/^[\[\【].*?[\]\】]\s*/g, "")
+    .trim();
+  const inlineValue = String(match[2] ?? "").trim();
+  if (!label || !inlineValue) {
+    return null;
+  }
+
+  return {
+    label,
+    value: inlineValue,
+  };
+}
+
 function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): UniversalImportRow {
   return {
     ...createEmptyRow(rowIndex),
@@ -717,7 +738,7 @@ async function parsePdfDocument(fileBuffer: Buffer, originalFileName: string): P
   }
 
   const lines = splitLines(text);
-  const rows = lines.map((line) => line.split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean));
+  const rows = lines.map((line) => line.split(/\t+|\s{2,}/).map((cell) => cell.trim()).filter(Boolean));
 
   return {
     fileType: "pdf",
@@ -790,8 +811,17 @@ function extractTailFields(
       row.forEach((cell, index) => {
         (Object.keys(labels) as UniversalImportField[]).forEach((field) => {
           const candidates = labels[field] ?? [];
+          const inlineKeyValue = parseInlineKeyValueCell(cell);
+          const inlineMatched = inlineKeyValue
+            ? candidates.some((label) => normalizeCell(inlineKeyValue.label) === normalizeCell(label))
+            : false;
+          if (!output[field] && inlineMatched) {
+            output[field] = cleanExtractedField(field, inlineKeyValue?.value ?? "");
+            return;
+          }
+
           if (!output[field] && candidates.some((label) => normalizeCell(cell) === label)) {
-            output[field] = normalizeCell(row[index + 1]);
+            output[field] = cleanExtractedField(field, normalizeCell(row[index + 1]));
           }
         });
       });

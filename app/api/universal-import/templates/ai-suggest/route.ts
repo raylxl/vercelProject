@@ -318,7 +318,30 @@ function normalizeKeyValueLabel(value: unknown) {
     .trim();
 }
 
+function parseInlineKeyValueCell(value: unknown) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/^(.{1,24}?)[：:]\s*(.+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const label = normalizeKeyValueLabel(match[1]);
+  const inlineValue = String(match[2] ?? "").trim();
+  if (!label || !inlineValue) {
+    return null;
+  }
+
+  return {
+    label,
+    value: inlineValue,
+  };
+}
+
 function hasNearbyValue(row: string[], cellIndex: number) {
+  if (parseInlineKeyValueCell(row[cellIndex])) {
+    return true;
+  }
+
   return row
     .slice(cellIndex + 1, Math.min(row.length, cellIndex + 5))
     .some((cell) => Boolean(String(cell ?? "").trim()));
@@ -332,7 +355,8 @@ function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parse
 
   rows.forEach((row, rowIndex) => {
     row.forEach((cell, cellIndex) => {
-      const normalizedCell = normalizeHeaderText(normalizeKeyValueLabel(cell));
+      const inlineKeyValue = parseInlineKeyValueCell(cell);
+      const normalizedCell = normalizeHeaderText(inlineKeyValue?.label ?? normalizeKeyValueLabel(cell));
       if (!normalizedCell || !hasNearbyValue(row, cellIndex)) {
         return;
       }
@@ -352,7 +376,7 @@ function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parse
           return;
         }
 
-        const exactLabel = String(cell ?? "").trim();
+        const exactLabel = inlineKeyValue?.label ?? normalizeKeyValueLabel(cell);
         if (!exactLabel) {
           return;
         }
