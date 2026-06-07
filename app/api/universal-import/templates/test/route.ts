@@ -10,6 +10,7 @@ import {
   type SupportedImportFileType,
   type UniversalImportRuleDsl,
 } from "@/lib/universal-import-engine";
+import { resolveImportFileType } from "@/lib/universal-import-file-type";
 import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
 import { NextResponse } from "next/server";
 
@@ -35,7 +36,7 @@ export async function POST(request: Request) {
 
     const formData = await request.formData();
     const file = formData.get("file");
-    const fileType = (formData.get("fileType")?.toString() || "excel") as SupportedImportFileType;
+    const requestedFileType = (formData.get("fileType")?.toString() || "excel") as SupportedImportFileType;
     const mappingRaw = formData.get("mapping")?.toString() ?? "";
     const ruleDslRaw = formData.get("ruleDsl")?.toString() ?? "";
 
@@ -43,6 +44,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "请上传样例文件后再试解析。" }, { status: 400 });
     }
 
+    if (file.size <= 0) {
+      return NextResponse.json({ error: "文件为空，请重新上传包含出库单内容的文件。" }, { status: 400 });
+    }
+
+    const fileType = resolveImportFileType(file.name, requestedFileType);
     const arrayBuffer = await file.arrayBuffer();
     const fileBuffer = Buffer.from(arrayBuffer);
     const document = await parseImportDocument({
