@@ -222,6 +222,7 @@ type SubmitSummary = {
   failedShipmentCount: number;
   submittedAt: string;
   failedResults: SubmitResult[];
+  blockingIssues: string[];
 };
 
 type SubmitResult = {
@@ -1151,6 +1152,7 @@ export function UniversalImportClient({
   const [dragActive, setDragActive] = useState(false);
   const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot | null>(null);
   const [submitSummary, setSubmitSummary] = useState<SubmitSummary | null>(null);
+  const [submitBlockingIssues, setSubmitBlockingIssues] = useState<string[]>([]);
   const [transformConfigDrafts, setTransformConfigDrafts] = useState<Record<string, string>>({});
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
     "智能多格式批量下单系统",
@@ -1545,6 +1547,8 @@ export function UniversalImportClient({
     setDraftRows([]);
     setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
     setSelectedIds([]);
+    setSubmitBlockingIssues([]);
+    setSubmitSummary(null);
     setHeaders([]);
     setColumnOptions([]);
     setTailSourceOptions({});
@@ -1651,6 +1655,7 @@ export function UniversalImportClient({
     setParseFailure(null);
     setPerformanceSnapshot(null);
     setSubmitSummary(null);
+    setSubmitBlockingIssues([]);
     setParseProgress({
       active: true,
       value: 15,
@@ -1742,6 +1747,8 @@ export function UniversalImportClient({
     setAiRiskNotes([]);
     setAiConfidenceReport([]);
     setParseFailure(null);
+    setSubmitBlockingIssues([]);
+    setSubmitSummary(null);
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
@@ -2040,6 +2047,7 @@ export function UniversalImportClient({
   }
 
   async function submitImport() {
+    setSubmitBlockingIssues([]);
     if (!selectedRuleId) {
       setStatus("请先手动选择解析规则，再提交下单。");
       return;
@@ -2051,7 +2059,10 @@ export function UniversalImportClient({
     }
     const immediateValidation = validateImportRows(draftRows, existingExternalCodes);
     if (immediateValidation.issues.length > 0) {
+      const issues = immediateValidation.issues.map((issue) => formatIssueLabel(issue));
+      setSubmitBlockingIssues(issues);
       setStatus(`存在 ${immediateValidation.issues.length} 个未修正问题，请先处理后再提交。`);
+      pushToast("提交被阻止，请先查看并修正错误明细。", "error");
       return;
     }
     setSubmitting(true);
@@ -2096,6 +2107,7 @@ export function UniversalImportClient({
       });
       const data = (await response.json()) as {
         error?: string;
+        issues?: string[];
         summary?: {
           successCount: number;
           failCount: number;
@@ -2105,6 +2117,7 @@ export function UniversalImportClient({
         results?: SubmitResult[];
       };
       if (!response.ok) {
+        setSubmitBlockingIssues(data.issues ?? []);
         throw new Error(data.error ?? "提交导入失败，请稍后重试。");
       }
       const summary = {
@@ -2129,13 +2142,16 @@ export function UniversalImportClient({
       setSubmitSummary({
         ...summary,
         failedResults,
+        blockingIssues: [],
         submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
       });
       pushToast(statusMessage, summary.failCount > 0 ? "error" : "success");
       void loadHistory({ ...historyFilters, page: 1 });
       void loadHistoryCodes();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "提交导入失败，请稍后重试。");
+      const message = error instanceof Error ? error.message : "提交导入失败，请稍后重试。";
+      setStatus(message);
+      pushToast(message, "error");
     } finally {
       window.clearInterval(timer);
       setSubmitting(false);
@@ -2979,6 +2995,25 @@ export function UniversalImportClient({
                     <span className="submit-blocked-hint">存在 {rowErrorSummary.length} 个未修正问题，请先修正后再提交。</span>
                   ) : null}
                 </div>
+
+                {(submitBlockingIssues.length > 0 || rowErrorSummary.length > 0) ? (
+                  <div className="submit-failure-list">
+                    <div className="card-heading compact">
+                      <div>
+                        <p className="section-kicker">提交阻断原因</p>
+                        <h3>请先修正以下问题</h3>
+                      </div>
+                      <span className="warning-count-badge">
+                        {(submitBlockingIssues.length > 0 ? submitBlockingIssues : rowErrorSummary).length} 个问题
+                      </span>
+                    </div>
+                    {(submitBlockingIssues.length > 0 ? submitBlockingIssues : rowErrorSummary).map((item) => (
+                      <div className="submit-failure-item" key={item}>
+                        <strong>{item}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
 
                 {submitSummary ? (
                   <div className="result-summary-card">
