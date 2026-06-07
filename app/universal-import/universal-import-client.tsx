@@ -137,6 +137,8 @@ type ColumnOption = {
 type TailSourceOption = {
   value: string;
   labels: string[];
+  kind: "keyValue" | "regex";
+  regex?: string;
 };
 
 type AiSuggestResponse = {
@@ -293,6 +295,7 @@ const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
 const PREVIEW_INITIAL_RENDER_COUNT = 160;
 const PREVIEW_RENDER_BATCH_SIZE = 160;
 const TAIL_SOURCE_PREFIX = "__tail__:";
+const TAIL_REGEX_SOURCE_PREFIX = "__tail_regex__:";
 const SUPPORTED_FILE_EXTENSIONS = [".xlsx", ".xls", ".docx", ".pdf"] as const;
 
 const TOP_NAV_ITEMS = ["智能多格式批量下单系统"] as const;
@@ -678,6 +681,10 @@ function encodeTailSourceValue(labels: string[]) {
   return `${TAIL_SOURCE_PREFIX}${encodeURIComponent(JSON.stringify(labels))}`;
 }
 
+function encodeTailRegexSourceValue(field: UniversalImportField, regex: string) {
+  return `${TAIL_REGEX_SOURCE_PREFIX}${encodeURIComponent(JSON.stringify({ field, regex }))}`;
+}
+
 function decodeTailSourceValue(value: string) {
   if (!value.startsWith(TAIL_SOURCE_PREFIX)) {
     return [];
@@ -688,6 +695,29 @@ function decodeTailSourceValue(value: string) {
     return normalizeTailLabels(parsed);
   } catch {
     return [];
+  }
+}
+
+function decodeTailRegexSourceValue(value: string) {
+  if (!value.startsWith(TAIL_REGEX_SOURCE_PREFIX)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(value.slice(TAIL_REGEX_SOURCE_PREFIX.length))) as unknown;
+    if (!isRecord(parsed)) {
+      return null;
+    }
+
+    const field = String(parsed.field ?? "");
+    const regex = String(parsed.regex ?? "").trim();
+    if (!UNIVERSAL_IMPORT_FIELDS.some((item) => item.key === field) || !regex) {
+      return null;
+    }
+
+    return { field: field as UniversalImportField, regex };
+  } catch {
+    return null;
   }
 }
 
@@ -710,6 +740,31 @@ function getTailSourceOption(rule: UniversalImportRuleDsl, field: UniversalImpor
   return {
     value: encodeTailSourceValue(labels),
     labels,
+    kind: "keyValue",
+  };
+}
+
+function getTailRegexSourceOption(rule: UniversalImportRuleDsl, field: UniversalImportField): TailSourceOption | null {
+  const tailTransform = getTailTransform(rule);
+  if (!tailTransform || !isRecord(tailTransform.config)) {
+    return null;
+  }
+
+  const fieldRegex = tailTransform.config.fieldRegex;
+  if (!isRecord(fieldRegex)) {
+    return null;
+  }
+
+  const regex = String(fieldRegex[field] ?? "").trim();
+  if (!regex) {
+    return null;
+  }
+
+  return {
+    value: encodeTailRegexSourceValue(field, regex),
+    labels: [UNIVERSAL_IMPORT_FIELD_LABELS[field]],
+    kind: "regex",
+    regex,
   };
 }
 
@@ -719,6 +774,7 @@ function getAvailableTailSourceOptions(
   discoveredTailSources: Partial<Record<UniversalImportField, string[]>>,
 ) {
   const configured = getTailSourceOption(rule, field);
+  const configuredRegex = getTailRegexSourceOption(rule, field);
   const discoveredLabels = normalizeTailLabels(discoveredTailSources[field]);
   const options = new Map<string, TailSourceOption>();
 
@@ -726,10 +782,15 @@ function getAvailableTailSourceOptions(
     options.set(configured.value, configured);
   }
 
+  if (configuredRegex) {
+    options.set(configuredRegex.value, configuredRegex);
+  }
+
   if (discoveredLabels.length > 0) {
     const discovered = {
       value: encodeTailSourceValue(discoveredLabels),
       labels: discoveredLabels,
+      kind: "keyValue" as const,
     };
     options.set(discovered.value, discovered);
   }
@@ -738,6 +799,10 @@ function getAvailableTailSourceOptions(
 }
 
 function getTailSourceOptionLabel(option: TailSourceOption) {
+  if (option.kind === "regex") {
+    return `尾部正则提取：${option.labels.join(" / ")}`;
+  }
+
   return `尾部信息提取：${option.labels.join(" / ")}`;
 }
 
@@ -750,7 +815,7 @@ function getMappingSelectValue(
     return String(currentColumn);
   }
 
-  return getTailSourceOption(rule, field)?.value ?? "";
+  return getTailSourceOption(rule, field)?.value ?? getTailRegexSourceOption(rule, field)?.value ?? "";
 }
 
 function getRuleDefaultValue(rule: UniversalImportRuleDsl, field: UniversalImportField) {
@@ -818,6 +883,58 @@ function updateTailSourceField(
       config: {
         keyValueLabels: {
           [field]: normalizedLabels,
+        },
+      },
+    });
+  }
+
+  return {
+    ...rule,
+    transforms: nextTransforms,
+  };
+}
+
+function updateTailRegexSourceField(
+  rule: UniversalImportRuleDsl,
+  field: UniversalImportField,
+  nextRegex: string,
+) {
+  const normalizedRegex = nextRegex.trim();
+  let transformMatched = false;
+
+  const nextTransforms = rule.transforms.map((transform) => {
+    if (transform.type !== "tail_text_extract") {
+      return transform;
+    }
+
+    transformMatched = true;
+    const currentConfig = isRecord(transform.config) ? transform.config : {};
+    const rawRegexMap = isRecord(currentConfig.fieldRegex) ? currentConfig.fieldRegex : {};
+    const nextRegexMap = { ...rawRegexMap } as Record<string, unknown>;
+
+    if (normalizedRegex) {
+      nextRegexMap[field] = normalizedRegex;
+    } else {
+      delete nextRegexMap[field];
+    }
+
+    return {
+      ...transform,
+      enabled: normalizedRegex ? true : transform.enabled,
+      config: {
+        ...currentConfig,
+        fieldRegex: nextRegexMap,
+      },
+    };
+  });
+
+  if (!transformMatched && normalizedRegex) {
+    nextTransforms.push({
+      type: "tail_text_extract",
+      enabled: true,
+      config: {
+        fieldRegex: {
+          [field]: normalizedRegex,
         },
       },
     });
@@ -1111,11 +1228,17 @@ export function UniversalImportClient({
 
     if (value.startsWith(TAIL_SOURCE_PREFIX)) {
       nextRuleDsl = updateTailSourceField(nextRuleDsl, field, decodeTailSourceValue(value));
+      nextRuleDsl = updateTailRegexSourceField(nextRuleDsl, field, "");
+    } else if (value.startsWith(TAIL_REGEX_SOURCE_PREFIX)) {
+      const regexSource = decodeTailRegexSourceValue(value);
+      nextRuleDsl = updateTailSourceField(nextRuleDsl, field, []);
+      nextRuleDsl = updateTailRegexSourceField(nextRuleDsl, field, regexSource?.regex ?? "");
     } else {
       const columnIndex = value === "" ? null : Number(value);
       nextMapping[field] = Number.isFinite(columnIndex) ? columnIndex : null;
       nextRuleDsl = mergeRuleDslMapping(ruleDsl, nextMapping);
       nextRuleDsl = updateTailSourceField(nextRuleDsl, field, []);
+      nextRuleDsl = updateTailRegexSourceField(nextRuleDsl, field, "");
     }
 
     setMapping(nextMapping);
