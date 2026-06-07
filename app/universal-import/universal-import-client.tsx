@@ -231,6 +231,29 @@ type SubmitResult = {
   error?: string;
 };
 
+async function readJsonResponse<T>(response: Response): Promise<T & { error?: string }> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const rawText = await response.text();
+
+  if (!rawText) {
+    return {} as T & { error?: string };
+  }
+
+  if (!contentType.includes("application/json")) {
+    return {
+      error: rawText.slice(0, 240) || `接口返回非 JSON 响应（HTTP ${response.status}）。`,
+    } as T & { error?: string };
+  }
+
+  try {
+    return JSON.parse(rawText) as T & { error?: string };
+  } catch {
+    return {
+      error: `接口响应 JSON 解析失败（HTTP ${response.status}）。`,
+    } as T & { error?: string };
+  }
+}
+
 type AggregatedPreviewShipment = {
   key: string;
   externalCode: string;
@@ -1489,7 +1512,7 @@ export function UniversalImportClient({
         method: "POST",
         body: formData,
       });
-      const data = (await response.json()) as AiSuggestResponse;
+      const data = await readJsonResponse<AiSuggestResponse>(response);
       if (!response.ok || !data.suggestedRule || !data.documentSummary) {
         throw new Error(data.error ?? "AI 规则建议生成失败，请稍后重试。");
       }
@@ -1527,7 +1550,13 @@ export function UniversalImportClient({
     } catch (error) {
       setAiProviderLabel("");
       setAiModelLabel("");
-      setAiSummary(error instanceof Error ? error.message : "AI 规则建议生成失败，请稍后重试。");
+      setAiSummary(
+        error instanceof TypeError && /fetch/i.test(error.message)
+          ? "AI 规则建议请求未能连接到服务器，请检查网络、文件大小或稍后重试。"
+          : error instanceof Error
+            ? error.message
+            : "AI 规则建议生成失败，请稍后重试。",
+      );
     } finally {
       setAiSuggesting(false);
     }

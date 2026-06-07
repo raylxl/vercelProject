@@ -23,7 +23,7 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const AI_SUGGEST_TIMEOUT_MS = 120_000;
+const AI_SUGGEST_TIMEOUT_MS = 45_000;
 
 type AiConfidenceItem = {
   field: UniversalImportField;
