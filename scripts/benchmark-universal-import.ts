@@ -11,6 +11,8 @@ function createBenchmarkRows(total = 1000): UniversalImportRow[] {
     skuName: `测试商品${index + 1}`,
     skuQuantity: String((index % 6) + 1),
     skuSpec: `${(index % 10) + 1}kg/箱`,
+    weight: String((index % 8) + 1),
+    temperatureZone: "冷藏",
     note: index % 7 === 0 ? "压测样例" : "",
     rowIndex: index + 1,
   }));

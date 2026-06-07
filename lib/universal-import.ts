@@ -111,6 +111,10 @@ function normalizeDisplayValue(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function isInventoryMetricQuantityHeader(value: string) {
+  return /(库存|在库|可用|结余|冻结|分配|待移入|下单后)/.test(value);
+}
+
 export function buildTemplateFingerprint(sheetName: string, headerRow: unknown[]) {
   const headers = headerRow.map((value) => normalizeText(value));
   return `${normalizeText(sheetName)}::${headers.join("|")}`;
@@ -132,6 +136,10 @@ export function inferMappingFromHeaders(headers: unknown[]): UniversalImportMapp
 
       const score = aliases.reduce((currentScore, alias) => {
         if (!alias) {
+          return currentScore;
+        }
+
+        if (field.key === "skuQuantity" && alias === "数量" && isInventoryMetricQuantityHeader(header)) {
           return currentScore;
         }
 

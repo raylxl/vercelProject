@@ -229,6 +229,58 @@ function isMetricLikeMatrixHeader(value: string) {
   return /^(?:\d+(?:\.\d+)?)$/.test(value) || /(合计|结余|库存|数量|在库|可用|冻结|分配|待移入)/.test(value);
 }
 
+function normalizeKeyValueLabel(value: unknown) {
+  return String(value ?? "")
+    .replace(/^[\[\【].*?[\]\】]\s*/g, "")
+    .replace(/[：:]\s*$/g, "")
+    .trim();
+}
+
+function normalizeKeyValueToken(value: unknown) {
+  return normalizeKeyValueLabel(value)
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[*＊]/g, "")
+    .replace(/[\s_-]+/g, "")
+    .replace(/[()[\]{}<>【】“”"'`‘’、，。；：！？,.!?/\\|]/g, "");
+}
+
+function isLikelyKeyValueLabel(value: unknown) {
+  const normalized = normalizeKeyValueToken(value);
+  if (!normalized) {
+    return false;
+  }
+
+  const extraLabels = ["备用联系人", "备用联系电话", "创建日期", "创建人", "审核人", "制单人", "签字"];
+  return [...UNIVERSAL_IMPORT_FIELDS.flatMap((field) => field.aliases), ...extraLabels].some(
+    (alias) => normalizeKeyValueToken(alias) === normalized,
+  );
+}
+
+function findAdjacentKeyValue(row: string[], index: number) {
+  return row
+    .slice(index + 1, Math.min(row.length, index + 5))
+    .map((value) => normalizeCell(value))
+    .find((value) => value && !isLikelyKeyValueLabel(value)) ?? "";
+}
+
+function isDenseTableHeaderRow(row: string[]) {
+  const populated = row.map((cell) => normalizeCell(cell)).filter(Boolean);
+  if (populated.length < 8) {
+    return false;
+  }
+
+  const labelLikeCount = populated.filter((cell) => {
+    const normalized = normalizeKeyValueToken(cell);
+    return (
+      isLikelyKeyValueLabel(cell) ||
+      /^(?:序号|行号|分类|品牌|单位|仓库|日期|备注|状态|批次|规格|型号|金额|单价|成本|体积|重量)$/.test(normalized)
+    );
+  }).length;
+
+  return labelLikeCount / populated.length >= 0.45;
+}
+
 function cleanExtractedField(field: UniversalImportField, value: string) {
   const normalized = value
     .replace(/\s+/g, " ")
@@ -262,9 +314,7 @@ function parseInlineKeyValueCell(value: unknown) {
     return null;
   }
 
-  const label = String(match[1] ?? "")
-    .replace(/^[\[\【].*?[\]\】]\s*/g, "")
-    .trim();
+  const label = normalizeKeyValueLabel(match[1]);
   const inlineValue = String(match[2] ?? "").trim();
   if (!label || !inlineValue) {
     return null;
@@ -808,20 +858,24 @@ function extractTailFields(
   if (keyValueLabels && typeof keyValueLabels === "object" && !Array.isArray(keyValueLabels)) {
     const labels = keyValueLabels as Partial<Record<UniversalImportField, string[]>>;
     section.rows.forEach((row) => {
+      if (isDenseTableHeaderRow(row)) {
+        return;
+      }
+
       row.forEach((cell, index) => {
         (Object.keys(labels) as UniversalImportField[]).forEach((field) => {
           const candidates = labels[field] ?? [];
           const inlineKeyValue = parseInlineKeyValueCell(cell);
           const inlineMatched = inlineKeyValue
-            ? candidates.some((label) => normalizeCell(inlineKeyValue.label) === normalizeCell(label))
+            ? candidates.some((label) => normalizeKeyValueLabel(inlineKeyValue.label) === normalizeKeyValueLabel(label))
             : false;
           if (!output[field] && inlineMatched) {
             output[field] = cleanExtractedField(field, inlineKeyValue?.value ?? "");
             return;
           }
 
-          if (!output[field] && candidates.some((label) => normalizeCell(cell) === label)) {
-            output[field] = cleanExtractedField(field, normalizeCell(row[index + 1]));
+          if (!output[field] && candidates.some((label) => normalizeKeyValueLabel(cell) === normalizeKeyValueLabel(label))) {
+            output[field] = cleanExtractedField(field, findAdjacentKeyValue(row, index));
           }
         });
       });

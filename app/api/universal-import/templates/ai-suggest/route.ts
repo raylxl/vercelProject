@@ -298,6 +298,211 @@ function applyHeaderRecommendation(rule: UniversalImportRuleDsl, headerRowIndex:
   };
 }
 
+function maxMappedColumn(mapping: Partial<Record<UniversalImportField, number | null>>) {
+  return Math.max(
+    -1,
+    ...Object.values(mapping).filter((value): value is number => typeof value === "number"),
+  );
+}
+
+function isPositiveCell(value: unknown) {
+  return /^\d+(?:\.\d+)?$/.test(String(value ?? "").trim()) && Number(value) > 0;
+}
+
+function isMetricLikeMatrixHeader(value: unknown) {
+  return /^(?:\d+(?:\.\d+)?)$/.test(String(value ?? "").trim()) ||
+    /(合计|总计|库存|结余|可用|待移入|分配|冻结|下单后|在库|数量)/.test(String(value ?? ""));
+}
+
+function findMatrixStartColumn(header: string[], mapping: UniversalImportMapping) {
+  const fixedEnd = maxMappedColumn({
+    skuCode: mapping.skuCode,
+    skuName: mapping.skuName,
+    skuSpec: mapping.skuSpec,
+    externalCode: mapping.externalCode,
+  });
+  const firstBusinessDimension = header.findIndex((cell, index) =>
+    index > fixedEnd && Boolean(normalizeHeaderText(cell)) && !isMetricLikeMatrixHeader(cell),
+  );
+
+  return firstBusinessDimension >= 0 ? firstBusinessDimension : Math.max(fixedEnd + 1, 0);
+}
+
+function updateTransform(
+  rule: UniversalImportRuleDsl,
+  type: UniversalImportRuleDsl["transforms"][number]["type"],
+  patch: Partial<UniversalImportRuleDsl["transforms"][number]>,
+) {
+  return {
+    ...rule,
+    transforms: rule.transforms.map((transform) =>
+      transform.type === type
+        ? {
+            ...transform,
+            ...patch,
+            config: {
+              ...(transform.config ?? {}),
+              ...(patch.config ?? {}),
+            },
+          }
+        : transform,
+    ),
+  };
+}
+
+function detectMatrixRecommendation(
+  document: Awaited<ReturnType<typeof parseImportDocument>>,
+  mapping: UniversalImportMapping,
+  headerRowIndex: number,
+) {
+  if (typeof mapping.skuQuantity === "number") {
+    return null;
+  }
+
+  const rows = document.sections[0]?.rows ?? [];
+  const header = rows[headerRowIndex] ?? [];
+  const sampleRows = rows.slice(headerRowIndex + 1, headerRowIndex + 8);
+  const matrixStartColumn = findMatrixStartColumn(header, mapping);
+  const candidateHeaders = header
+    .slice(matrixStartColumn)
+    .filter((cell) => normalizeHeaderText(cell) && !isMetricLikeMatrixHeader(cell));
+  const positiveCells = sampleRows.reduce(
+    (count, row) =>
+      count +
+      row
+        .slice(matrixStartColumn)
+        .filter((cell, offset) => !isMetricLikeMatrixHeader(header[matrixStartColumn + offset]) && isPositiveCell(cell))
+        .length,
+    0,
+  );
+
+  if (candidateHeaders.length < 2 || positiveCells < 2) {
+    return null;
+  }
+
+  return {
+    headerRowIndex,
+    dataStartRowIndex: headerRowIndex + 1,
+    rowFieldColumns: {
+      skuCode: mapping.skuCode,
+      skuName: mapping.skuName,
+      skuSpec: mapping.skuSpec,
+      externalCode: mapping.externalCode,
+    },
+    matrixStartColumn,
+    matrixEndColumn: Math.max(header.length - 1, matrixStartColumn),
+    excludeHeaderRegex: "合计|总计|库存|结余|可用|待移入|分配|冻结|下单后",
+    externalCodeTemplate: "MATRIX-{receiverStore}",
+  };
+}
+
+function detectSplitMultilineCellRecommendation(document: Awaited<ReturnType<typeof parseImportDocument>>) {
+  const rows = document.sections[0]?.rows ?? [];
+  const headerRowIndex = inferBestHeaderRowIndex(document);
+  const header = rows[headerRowIndex] ?? [];
+  const sampleRows = rows.slice(headerRowIndex + 1, headerRowIndex + 8);
+  const hasMultilineItems = sampleRows.some((row) =>
+    row.some((cell) => /[\n\r]/.test(cell) && /(?:x|X|×|\*)\s*\d/.test(cell)),
+  );
+
+  if (!hasMultilineItems) {
+    return null;
+  }
+
+  return {
+    headerRowIndex,
+    dataStartRowIndex: headerRowIndex + 1,
+    rowFieldColumns: {
+      receiverStore: 0,
+      externalCode: 0,
+    },
+    matrixStartColumn: 1,
+    matrixEndColumn: Math.max(header.length - 1, 1),
+    columnValueField: "note",
+    itemRegex: "([^\\n\\r,，;；|]+?)\\s*(?:x|X|×|\\*)\\s*(\\d+(?:\\.\\d+)?)",
+    skuNameGroup: 1,
+    skuQuantityGroup: 2,
+    defaultSkuCodePrefix: "AUTO-SKU",
+    externalCodeTemplate: "PLAN-{receiverStore}-{columnHeader}",
+  };
+}
+
+function detectCardSplitRecommendation(document: Awaited<ReturnType<typeof parseImportDocument>>) {
+  const rows = document.sections[0]?.rows ?? [];
+  const startIndex = rows.findIndex((row) => /调拨记录|▶|card/i.test(row.join(" ")));
+
+  if (startIndex < 0) {
+    return null;
+  }
+
+  const itemHeaderIndex = rows.findIndex((row, index) =>
+    index > startIndex && scoreHeaderRow(row) >= 12 && /编码|名称|数量|SKU/i.test(row.join(" ")),
+  );
+  const itemHeader = itemHeaderIndex >= 0 ? rows[itemHeaderIndex] : [];
+
+  return {
+    startRegex: "调拨记录|▶|card",
+    itemHeaderRegex: "编码|名称|数量|SKU",
+    fieldRegex: {
+      receiverStore: "(?:调入门店|收货门店|门店)[:：\\s]*([^|\\n\\r]+)",
+      receiverName: "(?:收货人|联系人|收件人)[:：\\s]*([^|\\n\\r]+)",
+      receiverPhone: "(?:电话|手机|联系电话)[:：\\s]*(1\\d{10}|(?:0\\d{2,3}-?)?\\d{7,8})",
+      receiverAddress: "(?:收货地址|地址)[:：\\s]*([^|\\n\\r]+)",
+    },
+    itemColumns: inferMappingFromHeaders(itemHeader),
+    excludeRowRegex: "合计|小计|备注",
+  };
+}
+
+function applyLocalComplexRecommendations(
+  rule: UniversalImportRuleDsl,
+  document: Awaited<ReturnType<typeof parseImportDocument>>,
+  mapping: UniversalImportMapping,
+  headerRowIndex: number,
+) {
+  let nextRule = rule;
+
+  const cardConfig = detectCardSplitRecommendation(document);
+  if (cardConfig) {
+    nextRule = updateTransform(nextRule, "card_split", {
+      enabled: true,
+      config: cardConfig,
+    });
+    nextRule = updateTransform(nextRule, "matrix_pivot", {
+      enabled: false,
+      config: {},
+    });
+    nextRule = updateTransform(nextRule, "header_mapping", {
+      config: { emitWithCard: false },
+    });
+    return nextRule;
+  }
+
+  const splitMultilineConfig = detectSplitMultilineCellRecommendation(document);
+  if (splitMultilineConfig) {
+    nextRule = updateTransform(nextRule, "split_multiline_cell", {
+      enabled: true,
+      config: splitMultilineConfig,
+    });
+    nextRule = updateTransform(nextRule, "header_mapping", {
+      config: { emitWithSplitMultilineCell: false },
+    });
+  }
+
+  const matrixConfig = detectMatrixRecommendation(document, mapping, headerRowIndex);
+  if (matrixConfig) {
+    nextRule = updateTransform(nextRule, "matrix_pivot", {
+      enabled: true,
+      config: matrixConfig,
+    });
+    nextRule = updateTransform(nextRule, "header_mapping", {
+      config: { emitWithMatrix: false },
+    });
+  }
+
+  return nextRule;
+}
+
 const KEY_VALUE_FIELD_ALIASES: Record<UniversalImportField, string[]> = {
   externalCode: ["外部编码", "订单号", "配送单号", "配送汇总单号", "单据编号", "单据号", "单号"],
   receiverStore: ["收货门店", "门店", "门店名称", "收货机构", "收货单位"],
@@ -308,6 +513,8 @@ const KEY_VALUE_FIELD_ALIASES: Record<UniversalImportField, string[]> = {
   skuName: [],
   skuQuantity: [],
   skuSpec: [],
+  weight: ["重量", "计费重量", "实际重量", "毛重"],
+  temperatureZone: ["温层", "温区", "温度要求", "运输温层"],
   note: ["备注", "收货机构备注", "附加说明", "说明"],
 };
 
@@ -347,6 +554,35 @@ function hasNearbyValue(row: string[], cellIndex: number) {
     .some((cell) => Boolean(String(cell ?? "").trim()));
 }
 
+function isLikelyKeyValueLabel(value: unknown) {
+  const normalized = normalizeHeaderText(normalizeKeyValueLabel(value)).replace(/[*＊]/g, "");
+  if (!normalized) {
+    return false;
+  }
+
+  const extraLabels = ["备用联系人", "备用联系电话", "创建日期", "创建人", "审核人", "制单人", "签字"];
+  return [...UNIVERSAL_IMPORT_FIELDS.flatMap((field) => field.aliases), ...extraLabels].some(
+    (alias) => normalizeHeaderText(alias) === normalized,
+  );
+}
+
+function isDenseTableHeaderRow(row: string[]) {
+  const populated = row.map((cell) => String(cell ?? "").trim()).filter(Boolean);
+  if (populated.length < 8) {
+    return false;
+  }
+
+  const labelLikeCount = populated.filter((cell) => {
+    const normalized = normalizeHeaderText(cell);
+    return (
+      isLikelyKeyValueLabel(cell) ||
+      /^(?:序号|行号|分类|品牌|单位|仓库|日期|备注|状态|批次|规格|型号|金额|单价|成本|体积|重量)$/.test(normalized)
+    );
+  }).length;
+
+  return labelLikeCount / populated.length >= 0.45;
+}
+
 function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parseImportDocument>>) {
   const firstSection = document.sections[0];
   const rows = firstSection?.rows ?? [];
@@ -354,6 +590,10 @@ function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parse
   const matchedRowIndexes = new Set<number>();
 
   rows.forEach((row, rowIndex) => {
+    if (isDenseTableHeaderRow(row)) {
+      return;
+    }
+
     row.forEach((cell, cellIndex) => {
       const inlineKeyValue = parseInlineKeyValueCell(cell);
       const normalizedCell = normalizeHeaderText(inlineKeyValue?.label ?? normalizeKeyValueLabel(cell));
@@ -447,7 +687,13 @@ function createFallbackSuggestion(
     ? mergeMappingCandidates(undefined, inferMappingFromHeaders(effectiveHeaders), suggestedMapping)
     : suggestedMapping;
   const headerRecommendedRule = applyHeaderRecommendation(suggestedRule, headerRowIndex, effectiveMapping);
-  const tailRecommended = applyKeyValueExtractionRecommendation(headerRecommendedRule, document);
+  const complexRecommendedRule = applyLocalComplexRecommendations(
+    headerRecommendedRule,
+    document,
+    effectiveMapping,
+    headerRowIndex,
+  );
+  const tailRecommended = applyKeyValueExtractionRecommendation(complexRecommendedRule, document);
   const recommendedRule = ensureGroupByExternalCode(tailRecommended.rule);
   const confidenceReport = UNIVERSAL_IMPORT_FIELDS.map((field) => ({
     field: field.key,
@@ -822,7 +1068,13 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
     headerBackedMapping,
   );
   const headerRecommendedRule = applyHeaderRecommendation(mergedRule, headerRowIndex, mapping);
-  const tailRecommended = applyKeyValueExtractionRecommendation(headerRecommendedRule, document);
+  const complexRecommendedRule = applyLocalComplexRecommendations(
+    headerRecommendedRule,
+    document,
+    mapping,
+    headerRowIndex,
+  );
+  const tailRecommended = applyKeyValueExtractionRecommendation(complexRecommendedRule, document);
   const suggestedRule = ensureGroupByExternalCode(tailRecommended.rule);
 
   const normalizedConfidenceReport =
