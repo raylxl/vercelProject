@@ -1192,7 +1192,7 @@ function parseTextItems(
     const skuSpec = getCapture(match, itemConfig?.skuSpecGroup, 3);
     const skuQuantity = getCapture(match, itemConfig?.skuQuantityGroup, 4);
 
-    if (!skuCode || !skuName || !isPositiveQuantity(skuQuantity)) {
+    if (!isSkuCodeLike(skuCode) || !skuName || !isPositiveQuantity(skuQuantity)) {
       continue;
     }
 

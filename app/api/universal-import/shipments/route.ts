@@ -9,6 +9,9 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
 type ShipmentDraft = {
   externalCode: string;
   receiverStore: string | null;
@@ -38,6 +41,11 @@ type ShipmentSubmitResult = {
   shipmentId?: string;
   rowIndexes: number[];
   error?: string;
+};
+
+type PreparedShipmentDraft = ShipmentDraft & {
+  id: string;
+  receiverGroups: Array<ReceiverGroupDraft & { id: string }>;
 };
 
 async function ensureExamModeAccess() {
@@ -489,14 +497,21 @@ export async function POST(request: Request) {
       },
     });
 
-    const shipmentResults: ShipmentSubmitResult[] = [];
+    const preparedShipments: PreparedShipmentDraft[] = Array.from(shipmentMap.values()).map((shipment) => ({
+      ...shipment,
+      id: crypto.randomUUID(),
+      receiverGroups: buildReceiverGroups(shipment.rows).map((group) => ({
+        ...group,
+        id: crypto.randomUUID(),
+      })),
+    }));
 
-    for (const shipment of shipmentMap.values()) {
-      try {
-        const createdShipment = await prisma.$transaction(async (tx) => {
-          const receiverGroups = buildReceiverGroups(shipment.rows);
-          const nextShipment = await tx.universalImportShipment.create({
-            data: {
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.universalImportShipment.createMany({
+            data: preparedShipments.map((shipment) => ({
+              id: shipment.id,
               batchId: batch.id,
               externalCode: shipment.externalCode,
               receiverStore: shipment.receiverStore,
@@ -506,64 +521,111 @@ export async function POST(request: Request) {
               note: shipment.note,
               sourceRowCount: shipment.sourceRowCount,
               raw: shipment.rows,
-            },
+            })),
           });
 
-          const receiverGroupIdByKey = new Map<string, string>();
+          const receiverGroups = preparedShipments.flatMap((shipment) =>
+            shipment.receiverGroups.map((group) => ({
+              id: group.id,
+              shipmentId: shipment.id,
+              receiverStore: group.receiverStore,
+              receiverName: group.receiverName,
+              receiverPhone: group.receiverPhone,
+              receiverAddress: group.receiverAddress,
+              note: group.note,
+              sourceRowCount: group.rows.length,
+              raw: group.rows,
+            })),
+          );
 
-          for (const group of receiverGroups) {
-            const createdGroup = await tx.universalImportShipmentReceiverGroup.create({
-              data: {
-                shipmentId: nextShipment.id,
-                receiverStore: group.receiverStore,
-                receiverName: group.receiverName,
-                receiverPhone: group.receiverPhone,
-                receiverAddress: group.receiverAddress,
-                note: group.note,
-                sourceRowCount: group.rows.length,
-                raw: group.rows,
-              },
-            });
-            receiverGroupIdByKey.set(group.key, createdGroup.id);
-          }
-
-          for (const row of shipment.rows) {
-            await tx.universalImportShipmentItem.create({
-              data: {
-                shipmentId: nextShipment.id,
-                receiverGroupId: receiverGroupIdByKey.get(getReceiverGroupKey(row)),
-                sourceRowIndex: row.rowIndex,
-                skuCode: row.skuCode.trim(),
-                skuName: row.skuName.trim(),
-                skuQuantity: Number.parseFloat(row.skuQuantity.trim()),
-                skuSpec: row.skuSpec.trim() || null,
-                raw: row,
-              },
+          if (receiverGroups.length > 0) {
+            await tx.universalImportShipmentReceiverGroup.createMany({
+              data: receiverGroups,
             });
           }
 
-          return nextShipment;
-        });
+          const itemRows = preparedShipments.flatMap((shipment) => {
+            const receiverGroupIdByKey = new Map(shipment.receiverGroups.map((group) => [group.key, group.id] as const));
 
-        shipmentResults.push({
-          externalCode: shipment.externalCode,
-          receiverLabel: buildReceiverLabel(shipment),
-          sourceRowCount: shipment.sourceRowCount,
-          status: "success",
-          shipmentId: createdShipment.id,
-          rowIndexes: shipment.rows.map((row) => row.rowIndex),
-        });
-      } catch (shipmentError) {
-        shipmentResults.push({
-          externalCode: shipment.externalCode,
-          receiverLabel: buildReceiverLabel(shipment),
-          sourceRowCount: shipment.sourceRowCount,
-          status: "failed",
-          rowIndexes: shipment.rows.map((row) => row.rowIndex),
-          error: shipmentError instanceof Error ? shipmentError.message : "运单入库失败",
-        });
-      }
+            return shipment.rows.map((row) => ({
+              shipmentId: shipment.id,
+              receiverGroupId: receiverGroupIdByKey.get(getReceiverGroupKey(row)),
+              sourceRowIndex: row.rowIndex,
+              skuCode: row.skuCode.trim(),
+              skuName: row.skuName.trim(),
+              skuQuantity: Number.parseFloat(row.skuQuantity.trim()),
+              skuSpec: row.skuSpec.trim() || null,
+              raw: row,
+            }));
+          });
+
+          if (itemRows.length > 0) {
+            await tx.universalImportShipmentItem.createMany({
+              data: itemRows,
+            });
+          }
+        },
+        { timeout: 120_000 },
+      );
+    } catch (shipmentError) {
+      const message = shipmentError instanceof Error ? shipmentError.message : "运单批量入库失败";
+      await prisma.universalImportBatch.update({
+        where: {
+          id: batch.id,
+        },
+        data: {
+          status: "FAILED",
+          successRows: 0,
+          failedRows: rows.length,
+          parseSummary: {
+            headers: (body.headers ?? []).map((header) => String(header ?? "")),
+            fingerprint: body.fingerprint ?? "",
+            mapping: (body.mapping ?? {}) as Prisma.InputJsonValue,
+            shipmentCount: shipmentMap.size,
+            successShipmentCount: 0,
+            failedShipmentCount: preparedShipments.length,
+            shipmentResults: preparedShipments.map((shipment) => ({
+              externalCode: shipment.externalCode,
+              receiverLabel: buildReceiverLabel(shipment),
+              sourceRowCount: shipment.sourceRowCount,
+              status: "failed",
+              rowIndexes: shipment.rows.map((row) => row.rowIndex),
+              error: message,
+            })),
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          error: message,
+          summary: {
+            successCount: 0,
+            failCount: rows.length,
+            shipmentCount: 0,
+            failedShipmentCount: preparedShipments.length,
+          },
+          results: preparedShipments.map((shipment) => ({
+            externalCode: shipment.externalCode,
+            receiverLabel: buildReceiverLabel(shipment),
+            sourceRowCount: shipment.sourceRowCount,
+            status: "failed",
+            rowIndexes: shipment.rows.map((row) => row.rowIndex),
+            error: message,
+          })),
+        },
+        { status: 500 },
+      );
     }
+
+    const shipmentResults: ShipmentSubmitResult[] = preparedShipments.map((shipment) => ({
+      externalCode: shipment.externalCode,
+      receiverLabel: buildReceiverLabel(shipment),
+      sourceRowCount: shipment.sourceRowCount,
+      status: "success",
+      shipmentId: shipment.id,
+      rowIndexes: shipment.rows.map((row) => row.rowIndex),
+    }));
 
     const successShipments = shipmentResults.filter((item) => item.status === "success");
     const failedShipments = shipmentResults.filter((item) => item.status === "failed");
