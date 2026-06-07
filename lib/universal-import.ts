@@ -303,7 +303,7 @@ export function validateImportRows(
       Boolean(row.receiverPhone.trim()) &&
       Boolean(row.receiverAddress.trim());
 
-    if (!externalCode && !hasStoreGroup && !hasReceiverGroup) {
+    if (!hasStoreGroup && !hasReceiverGroup) {
       issues.push({
         rowIndex: rowNumber,
         field: "receiverStore",
