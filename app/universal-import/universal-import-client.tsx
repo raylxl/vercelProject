@@ -276,38 +276,6 @@ type ToastItem = {
   tone: ToastTone;
 };
 
-function EmptyStateIllustration({ mode }: { mode: "preview" | "rules" }) {
-  return (
-    <div className={`empty-state-illustration ${mode}`} aria-hidden="true">
-      <div className="empty-state-board">
-        <span className="empty-state-chip">AI</span>
-        <div className="empty-state-lines">
-          <span />
-          <span />
-          <span />
-        </div>
-      </div>
-      <div className="empty-state-docs">
-        <div className="empty-state-doc primary">
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className="empty-state-doc secondary">
-          <span />
-          <span />
-        </div>
-      </div>
-      <div className="empty-state-grid-markers">
-        <span />
-        <span />
-        <span />
-        <span />
-      </div>
-    </div>
-  );
-}
-
 const DEFAULT_MAPPING = Object.fromEntries(
   UNIVERSAL_IMPORT_FIELDS.map((field) => [field.key, null]),
 ) as UniversalImportMapping;
@@ -3115,7 +3083,7 @@ export function UniversalImportClient({
                           })}
                         </div>
                       ) : (
-                        <div className="empty-row rule-editor-empty">可直接点击“新建规则”创建空白规则；如需配置字段映射，请上传样例文件生成 AI 建议，或应用一条带样例表头的已保存规则。</div>
+                        <div className="empty-row rule-editor-empty with-illustration">可直接点击“新建规则”创建空白规则；如需配置字段映射，请上传样例文件生成 AI 建议，或应用一条带样例表头的已保存规则。</div>
                       )}
                     </div>
 
