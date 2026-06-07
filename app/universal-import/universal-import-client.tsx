@@ -297,6 +297,16 @@ const PREVIEW_RENDER_BATCH_SIZE = 160;
 const TAIL_SOURCE_PREFIX = "__tail__:";
 const TAIL_REGEX_SOURCE_PREFIX = "__tail_regex__:";
 const SUPPORTED_FILE_EXTENSIONS = [".xlsx", ".xls", ".docx", ".pdf"] as const;
+const TRANSFORM_TYPE_LABELS: Record<RuleTransformType, string> = {
+  header_mapping: "表头映射",
+  multisheet_merge: "多 Sheet 合并",
+  group_by_external_code: "按外部编码聚合",
+  matrix_pivot: "矩阵转置",
+  split_multiline_cell: "复合单元格拆分",
+  tail_text_extract: "尾部信息提取",
+  card_split: "卡片式拆分",
+  text_record_split: "文本记录拆分",
+};
 
 const TOP_NAV_ITEMS = ["智能多格式批量下单系统"] as const;
 
@@ -657,6 +667,48 @@ function formatFileTypeLabel(value: string) {
 
 function formatTransformConfig(config: Record<string, unknown> | undefined) {
   return JSON.stringify(config ?? {}, null, 2);
+}
+
+function getTransformTypeLabel(type: RuleTransformType) {
+  return TRANSFORM_TYPE_LABELS[type] ?? type;
+}
+
+function getTransformConfigSummary(config: Record<string, unknown> | undefined) {
+  if (!config || Object.keys(config).length === 0) {
+    return "未配置参数";
+  }
+
+  const summaryParts: string[] = [];
+
+  if (typeof config.headerRowIndex === "number") {
+    summaryParts.push(`表头第 ${config.headerRowIndex + 1} 行`);
+  }
+
+  if (typeof config.dataStartRowIndex === "number") {
+    summaryParts.push(`数据第 ${config.dataStartRowIndex + 1} 行起`);
+  }
+
+  if (typeof config.groupField === "string" && config.groupField.trim()) {
+    summaryParts.push(`按 ${config.groupField.trim()} 分组`);
+  }
+
+  if (typeof config.recordDelimiter === "string" && config.recordDelimiter.trim()) {
+    summaryParts.push("已设记录分隔");
+  }
+
+  if (typeof config.cardStartPattern === "string" && config.cardStartPattern.trim()) {
+    summaryParts.push("已设卡片边界");
+  }
+
+  if (typeof config.valueField === "string" && config.valueField.trim()) {
+    summaryParts.push(`值字段 ${config.valueField.trim()}`);
+  }
+
+  if (summaryParts.length > 0) {
+    return summaryParts.join(" / ");
+  }
+
+  return `已配置 ${Object.keys(config).length} 项参数`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -3332,8 +3384,29 @@ export function UniversalImportClient({
                           <h3>规则 DSL JSON / 表单编辑</h3>
                         </div>
                       </div>
-                      {ruleDsl.transforms.map((transform) => (
-                        <article className="transform-editor-card" key={transform.type}>
+                      <div className="transform-editor-stack">
+                        {ruleDsl.transforms.map((transform, index) => (
+                          <details
+                            className={`transform-editor-card${transform.enabled ? " is-enabled" : " is-disabled"}`}
+                            key={transform.type}
+                            open={transform.enabled && index === 0}
+                          >
+                            <summary className="transform-editor-summary">
+                              <div className="transform-editor-summary-main">
+                                <div className="transform-editor-title-block">
+                                  <span className="transform-editor-eyebrow">{transform.type}</span>
+                                  <strong>{getTransformTypeLabel(transform.type)}</strong>
+                                </div>
+                                <p>{getTransformConfigSummary(transform.config)}</p>
+                              </div>
+                              <div className="transform-editor-summary-side">
+                                <span className={`transform-status-badge ${transform.enabled ? "enabled" : "disabled"}`}>
+                                  {transform.enabled ? "启用" : "关闭"}
+                                </span>
+                                <span className="transform-expand-hint">展开配置</span>
+                              </div>
+                            </summary>
+                            <div className="transform-editor-body">
                           <div className="transform-editor-header">
                             <div>
                               <p>{transform.type}</p>
@@ -3370,8 +3443,10 @@ export function UniversalImportClient({
                               spellCheck={false}
                             />
                           </label>
-                        </article>
-                      ))}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
                     </div>
                   </section>
 
