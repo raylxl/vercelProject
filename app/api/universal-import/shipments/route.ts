@@ -20,6 +20,16 @@ type ShipmentDraft = {
   rows: UniversalImportRow[];
 };
 
+type ReceiverGroupDraft = {
+  key: string;
+  receiverStore: string | null;
+  receiverName: string | null;
+  receiverPhone: string | null;
+  receiverAddress: string | null;
+  note: string | null;
+  rows: UniversalImportRow[];
+};
+
 type ShipmentSubmitResult = {
   externalCode: string;
   receiverLabel: string;
@@ -45,12 +55,103 @@ function parsePagination(searchParams: URLSearchParams) {
   return { page, pageSize };
 }
 
+function parseSubmittedDateRange(submittedAt: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(submittedAt)) {
+    return null;
+  }
+
+  const start = new Date(`${submittedAt}T00:00:00+08:00`);
+  if (Number.isNaN(start.getTime())) {
+    return null;
+  }
+
+  return {
+    start,
+    end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
+  };
+}
+
+function buildReceiverRowLabel(row: Pick<UniversalImportRow, "receiverStore" | "receiverName" | "receiverPhone" | "receiverAddress">) {
+  const receiverStore = row.receiverStore?.trim() ?? "";
+  const receiverName = row.receiverName?.trim() ?? "";
+  const receiverPhone = row.receiverPhone?.trim() ?? "";
+  const receiverAddress = row.receiverAddress?.trim() ?? "";
+
+  if (receiverStore) {
+    return receiverStore;
+  }
+
+  const receiverParts = [receiverName, receiverPhone, receiverAddress].filter(Boolean);
+  if (receiverParts.length > 0) {
+    return receiverParts.join(" / ");
+  }
+
+  return "";
+}
+
+function getReceiverGroupKey(row: UniversalImportRow) {
+  return [
+    row.receiverStore.trim(),
+    row.receiverName.trim(),
+    row.receiverPhone.trim(),
+    row.receiverAddress.trim(),
+    row.note.trim(),
+  ].join("\u001f");
+}
+
+function buildReceiverGroups(rows: UniversalImportRow[]) {
+  const groups = new Map<string, ReceiverGroupDraft>();
+
+  rows.forEach((row) => {
+    const key = getReceiverGroupKey(row);
+    const current =
+      groups.get(key) ??
+      {
+        key,
+        receiverStore: row.receiverStore.trim() || null,
+        receiverName: row.receiverName.trim() || null,
+        receiverPhone: row.receiverPhone.trim() || null,
+        receiverAddress: row.receiverAddress.trim() || null,
+        note: row.note.trim() || null,
+        rows: [],
+      };
+
+    current.rows.push(row);
+    groups.set(key, current);
+  });
+
+  return Array.from(groups.values());
+}
+
+function summarizeReceiverLabels(receiverLabels: string[]) {
+  if (receiverLabels.length === 0) {
+    return "未填写收货信息";
+  }
+
+  if (receiverLabels.length === 1) {
+    return receiverLabels[0];
+  }
+
+  return `${receiverLabels[0]} 等 ${receiverLabels.length} 组收货信息`;
+}
+
 function buildReceiverLabel(shipment: ShipmentDraft) {
-  return (
-    shipment.receiverStore ||
-    shipment.receiverName ||
-    shipment.receiverAddress ||
-    "未填写收货信息"
+  const receiverLabels = Array.from(
+    new Set(
+      shipment.rows
+        .map((row) => buildReceiverRowLabel(row))
+        .filter(Boolean),
+    ),
+  );
+
+  if (receiverLabels.length > 0) {
+    return summarizeReceiverLabels(receiverLabels);
+  }
+
+  return summarizeReceiverLabels(
+    [shipment.receiverStore, shipment.receiverName, shipment.receiverPhone, shipment.receiverAddress]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .map((value) => value.trim()),
   );
 }
 
@@ -69,80 +170,114 @@ export async function GET(request: Request) {
     const submittedAt = searchParams.get("submittedAt")?.trim() ?? "";
     const { page, pageSize } = parsePagination(searchParams);
 
-    const submittedDate =
-      submittedAt && !Number.isNaN(Date.parse(`${submittedAt}T00:00:00`))
-        ? new Date(`${submittedAt}T00:00:00`)
-        : null;
-    const nextDate = submittedDate
-      ? new Date(submittedDate.getTime() + 24 * 60 * 60 * 1000)
-      : null;
+    const submittedDateRange = parseSubmittedDateRange(submittedAt);
 
-    const where = {
-      ...(externalCode
-        ? {
-            externalCode: {
-              contains: externalCode,
-              mode: "insensitive" as const,
-            },
-          }
-        : {}),
-      ...(receiverName
-        ? {
+    const andFilters: Prisma.UniversalImportShipmentWhereInput[] = [];
+
+    if (externalCode) {
+      andFilters.push({
+        externalCode: {
+          contains: externalCode,
+          mode: "insensitive",
+        },
+      });
+    }
+
+    if (receiverName) {
+      andFilters.push({
+        OR: [
+          {
             receiverName: {
               contains: receiverName,
-              mode: "insensitive" as const,
+              mode: "insensitive",
             },
-          }
-        : {}),
-      ...(query
-        ? {
-            OR: [
-              {
-                externalCode: {
-                  contains: query,
-                  mode: "insensitive" as const,
-                },
-              },
-              {
+          },
+          {
+            receiverGroups: {
+              some: {
                 receiverName: {
-                  contains: query,
-                  mode: "insensitive" as const,
+                  contains: receiverName,
+                  mode: "insensitive",
                 },
               },
-              {
-                receiverStore: {
-                  contains: query,
-                  mode: "insensitive" as const,
-                },
-              },
-              {
-                batch: {
-                  batchName: {
-                    contains: query,
-                    mode: "insensitive" as const,
-                  },
-                },
-              },
-              {
-                batch: {
-                  originalFileName: {
-                    contains: query,
-                    mode: "insensitive" as const,
-                  },
-                },
-              },
-            ],
-          }
-        : {}),
-      ...(submittedDate && nextDate
-        ? {
-            createdAt: {
-              gte: submittedDate,
-              lt: nextDate,
             },
-          }
-        : {}),
-    };
+          },
+        ],
+      });
+    }
+
+    if (query) {
+      andFilters.push({
+        OR: [
+          {
+            externalCode: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+          {
+            receiverName: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+          {
+            receiverStore: {
+              contains: query,
+              mode: "insensitive",
+            },
+          },
+          {
+            receiverGroups: {
+              some: {
+                OR: [
+                  {
+                    receiverName: {
+                      contains: query,
+                      mode: "insensitive",
+                    },
+                  },
+                  {
+                    receiverStore: {
+                      contains: query,
+                      mode: "insensitive",
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            batch: {
+              batchName: {
+                contains: query,
+                mode: "insensitive",
+              },
+            },
+          },
+          {
+            batch: {
+              originalFileName: {
+                contains: query,
+                mode: "insensitive",
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    if (submittedDateRange) {
+      andFilters.push({
+        createdAt: {
+          gte: submittedDateRange.start,
+          lt: submittedDateRange.end,
+        },
+      });
+    }
+
+    const where: Prisma.UniversalImportShipmentWhereInput =
+      andFilters.length > 0 ? { AND: andFilters } : {};
 
     const total = await prisma.universalImportShipment.count({ where });
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -152,6 +287,11 @@ export async function GET(request: Request) {
       where,
       include: {
         batch: true,
+        receiverGroups: {
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
         items: {
           orderBy: {
             sourceRowIndex: "asc",
@@ -354,6 +494,7 @@ export async function POST(request: Request) {
     for (const shipment of shipmentMap.values()) {
       try {
         const createdShipment = await prisma.$transaction(async (tx) => {
+          const receiverGroups = buildReceiverGroups(shipment.rows);
           const nextShipment = await tx.universalImportShipment.create({
             data: {
               batchId: batch.id,
@@ -368,17 +509,38 @@ export async function POST(request: Request) {
             },
           });
 
-          await tx.universalImportShipmentItem.createMany({
-            data: shipment.rows.map((row) => ({
-              shipmentId: nextShipment.id,
-              sourceRowIndex: row.rowIndex,
-              skuCode: row.skuCode.trim(),
-              skuName: row.skuName.trim(),
-              skuQuantity: Number.parseFloat(row.skuQuantity.trim()),
-              skuSpec: row.skuSpec.trim() || null,
-              raw: row,
-            })),
-          });
+          const receiverGroupIdByKey = new Map<string, string>();
+
+          for (const group of receiverGroups) {
+            const createdGroup = await tx.universalImportShipmentReceiverGroup.create({
+              data: {
+                shipmentId: nextShipment.id,
+                receiverStore: group.receiverStore,
+                receiverName: group.receiverName,
+                receiverPhone: group.receiverPhone,
+                receiverAddress: group.receiverAddress,
+                note: group.note,
+                sourceRowCount: group.rows.length,
+                raw: group.rows,
+              },
+            });
+            receiverGroupIdByKey.set(group.key, createdGroup.id);
+          }
+
+          for (const row of shipment.rows) {
+            await tx.universalImportShipmentItem.create({
+              data: {
+                shipmentId: nextShipment.id,
+                receiverGroupId: receiverGroupIdByKey.get(getReceiverGroupKey(row)),
+                sourceRowIndex: row.rowIndex,
+                skuCode: row.skuCode.trim(),
+                skuName: row.skuName.trim(),
+                skuQuantity: Number.parseFloat(row.skuQuantity.trim()),
+                skuSpec: row.skuSpec.trim() || null,
+                raw: row,
+              },
+            });
+          }
 
           return nextShipment;
         });

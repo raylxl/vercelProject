@@ -37,8 +37,20 @@ type ShipmentHistoryRecord = {
   note: string | null;
   sourceRowCount: number;
   createdAt: string;
+  raw?: UniversalImportRow[];
+  receiverGroups?: Array<{
+    id: string;
+    receiverStore: string | null;
+    receiverName: string | null;
+    receiverPhone: string | null;
+    receiverAddress: string | null;
+    note: string | null;
+    sourceRowCount: number;
+    raw: UniversalImportRow[];
+  }>;
   items: Array<{
     id: string;
+    receiverGroupId?: string | null;
     sourceRowIndex: number;
     skuCode: string;
     skuName: string;
@@ -206,16 +218,33 @@ type SubmitSummary = {
   shipmentCount: number;
   failedShipmentCount: number;
   submittedAt: string;
+  failedResults: SubmitResult[];
+};
+
+type SubmitResult = {
+  externalCode: string;
+  receiverLabel: string;
+  sourceRowCount: number;
+  status: "success" | "failed";
+  shipmentId?: string;
+  rowIndexes: number[];
+  error?: string;
 };
 
 type AggregatedPreviewShipment = {
   key: string;
   externalCode: string;
   receiverLabel: string;
+  receiverGroupCount: number;
   rowCount: number;
   skuCount: number;
   quantityTotal: number;
   rowIndexes: number[];
+};
+
+type SameBatchDuplicateExternalCodeReport = {
+  summaries: string[];
+  noticesByRowId: Map<string, string>;
 };
 
 type ToastItem = {
@@ -239,7 +268,6 @@ const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
 
 const PREVIEW_INITIAL_RENDER_COUNT = 160;
 const PREVIEW_RENDER_BATCH_SIZE = 160;
-const MAX_VISIBLE_ISSUES = 200;
 const TAIL_SOURCE_PREFIX = "__tail__:";
 const SUPPORTED_FILE_EXTENSIONS = [".xlsx", ".xls", ".docx", ".pdf"] as const;
 
@@ -271,6 +299,8 @@ function createEmptyDraftRow(rowIndex: number): DraftRow {
     skuName: "",
     skuQuantity: "",
     skuSpec: "",
+    weight: "",
+    temperatureZone: "",
     note: "",
     rowIndex,
     id: createRowId(),
@@ -286,27 +316,77 @@ function toDraftRows(rows: UniversalImportRow[]) {
 }
 
 function getDraftReceiverLabel(row: UniversalImportRow) {
-  return (
-    row.receiverStore.trim() ||
-    [row.receiverName.trim(), row.receiverPhone.trim()].filter(Boolean).join(" / ") ||
-    row.receiverAddress.trim() ||
-    "-"
+  return formatReceiverLine(row);
+}
+
+function formatReceiverLine(source: {
+  receiverStore?: string | null;
+  receiverName?: string | null;
+  receiverPhone?: string | null;
+  receiverAddress?: string | null;
+}) {
+  const receiverStore = source.receiverStore?.trim() ?? "";
+  const receiverName = source.receiverName?.trim() ?? "";
+  const receiverPhone = source.receiverPhone?.trim() ?? "";
+  const receiverAddress = source.receiverAddress?.trim() ?? "";
+
+  if (receiverStore) {
+    return receiverStore;
+  }
+
+  const receiverParts = [receiverName, receiverPhone, receiverAddress].filter(Boolean);
+  if (receiverParts.length > 0) {
+    return receiverParts.join(" / ");
+  }
+
+  return "-";
+}
+
+function buildReceiverSummaryFromLines(lines: string[]) {
+  if (lines.length === 0) {
+    return "-";
+  }
+
+  if (lines.length === 1) {
+    return lines[0];
+  }
+
+  return `${lines[0]} 等 ${lines.length} 组收货信息`;
+}
+
+function collectUniqueReceiverLines(
+  sources: Array<{
+    receiverStore?: string | null;
+    receiverName?: string | null;
+    receiverPhone?: string | null;
+    receiverAddress?: string | null;
+  }>,
+) {
+  return Array.from(
+    new Set(
+      sources
+        .map((source) => formatReceiverLine(source))
+        .filter((line) => line !== "-"),
+    ),
   );
 }
 
 function buildAggregatedPreviewShipments(rows: DraftRow[]): AggregatedPreviewShipment[] {
-  const grouped = new Map<string, AggregatedPreviewShipment>();
+  const grouped = new Map<string, AggregatedPreviewShipment & { receiverLines: string[] }>();
 
   rows.forEach((row, index) => {
     const externalCode = row.externalCode.trim();
     const key = externalCode ? `external:${externalCode.toLowerCase()}` : `row:${row.id}`;
     const quantity = Number.parseFloat(row.skuQuantity.trim());
+    const receiverLine = getDraftReceiverLabel(row);
     const current =
       grouped.get(key) ??
       {
         key,
         externalCode: externalCode || `AUTO-${row.rowIndex || index + 1}`,
-        receiverLabel: getDraftReceiverLabel(row),
+        receiverLabel: receiverLine,
+        receiverGroupCount: receiverLine === "-" ? 0 : 1,
+        receiverLines: receiverLine === "-" ? [] : [receiverLine],
         rowCount: 0,
         skuCount: 0,
         quantityTotal: 0,
@@ -318,14 +398,53 @@ function buildAggregatedPreviewShipments(rows: DraftRow[]): AggregatedPreviewShi
     current.quantityTotal += Number.isFinite(quantity) ? quantity : 0;
     current.rowIndexes.push(row.rowIndex || index + 1);
 
-    if (current.receiverLabel === "-" && getDraftReceiverLabel(row) !== "-") {
-      current.receiverLabel = getDraftReceiverLabel(row);
+    if (receiverLine !== "-" && !current.receiverLines.includes(receiverLine)) {
+      current.receiverLines.push(receiverLine);
     }
+
+    current.receiverGroupCount = current.receiverLines.length;
+    current.receiverLabel = buildReceiverSummaryFromLines(current.receiverLines);
 
     grouped.set(key, current);
   });
 
-  return Array.from(grouped.values());
+  return Array.from(grouped.values()).map(({ receiverLines: _, ...shipment }) => shipment);
+}
+
+function buildSameBatchDuplicateExternalCodeReport(rows: DraftRow[]): SameBatchDuplicateExternalCodeReport {
+  const grouped = new Map<string, { externalCode: string; rowNumbers: number[]; rowIds: string[] }>();
+
+  rows.forEach((row, index) => {
+    const externalCode = row.externalCode.trim();
+
+    if (!externalCode) {
+      return;
+    }
+
+    const normalized = externalCode.toLowerCase();
+    const current = grouped.get(normalized) ?? { externalCode, rowNumbers: [], rowIds: [] };
+    current.rowNumbers.push(row.rowIndex || index + 1);
+    current.rowIds.push(row.id);
+    grouped.set(normalized, current);
+  });
+
+  const summaries: string[] = [];
+  const noticesByRowId = new Map<string, string>();
+
+  grouped.forEach((item) => {
+    if (item.rowNumbers.length <= 1) {
+      return;
+    }
+
+    const notice = `同批次外部编码「${item.externalCode}」重复：第 ${item.rowNumbers.join(
+      "、",
+    )} 行将按同一运单聚合，请确认不是误填。`;
+
+    summaries.push(notice);
+    item.rowIds.forEach((rowId) => noticesByRowId.set(rowId, notice));
+  });
+
+  return { summaries, noticesByRowId };
 }
 
 function toSafeSheetName(name: string) {
@@ -680,11 +799,43 @@ function getAiMappingStatus(item: AiConfidenceItem | undefined) {
 }
 
 function formatReceiverSummary(record: ShipmentHistoryRecord) {
-  return (
-    record.receiverStore ||
-    [record.receiverName, record.receiverPhone].filter(Boolean).join(" / ") ||
-    record.receiverAddress ||
-    "-"
+  const receiverLines =
+    record.receiverGroups && record.receiverGroups.length > 0
+      ? collectUniqueReceiverLines(record.receiverGroups)
+      : collectUniqueReceiverLines(record.raw ?? [record]);
+  return buildReceiverSummaryFromLines(receiverLines);
+}
+
+function buildHistoryReceiverDetail(record: ShipmentHistoryRecord) {
+  const receiverLines =
+    record.receiverGroups && record.receiverGroups.length > 0
+      ? collectUniqueReceiverLines(record.receiverGroups)
+      : collectUniqueReceiverLines(record.raw ?? [record]);
+
+  if (receiverLines.length <= 1) {
+    return {
+      title: receiverLines[0] ?? "-",
+      detail: record.note || "无补充信息",
+    };
+  }
+
+  return {
+    title: `共 ${receiverLines.length} 组收货信息`,
+    detail: receiverLines.join("；"),
+  };
+}
+
+function buildHistoryReceiverLookup(record: ShipmentHistoryRecord) {
+  if (record.receiverGroups && record.receiverGroups.length > 0) {
+    return new Map(
+      record.receiverGroups.flatMap((group) =>
+        (group.raw ?? []).map((row) => [row.rowIndex, formatReceiverLine(group)] as const),
+      ),
+    );
+  }
+
+  return new Map(
+    (record.raw ?? []).map((row) => [row.rowIndex, formatReceiverLine(row)] as const),
   );
 }
 
@@ -799,11 +950,10 @@ export function UniversalImportClient({
     () => validation.issues.map((issue) => formatIssueLabel(issue)),
     [validation.issues],
   );
-  const visibleIssueSummary = useMemo(
-    () => rowErrorSummary.slice(0, MAX_VISIBLE_ISSUES),
-    [rowErrorSummary],
+  const sameBatchDuplicateReport = useMemo(
+    () => buildSameBatchDuplicateExternalCodeReport(deferredDraftRows),
+    [deferredDraftRows],
   );
-  const hiddenIssueCount = Math.max(rowErrorSummary.length - visibleIssueSummary.length, 0);
 
   const historyShipmentCount = historyData.total ?? 0;
   const historyItemCount = useMemo(
@@ -816,6 +966,7 @@ export function UniversalImportClient({
     [historyData.records, selectedHistoryId],
   );
   const hasBlockingErrors = validation.issues.length > 0;
+  const hasSameBatchDuplicateExternalCodes = sameBatchDuplicateReport.summaries.length > 0;
   const allRowsSelected = draftRows.length > 0 && selectedIds.length === draftRows.length;
   const selectedCount = selectedIds.length;
   const totalCount = draftRows.length;
@@ -1017,22 +1168,35 @@ export function UniversalImportClient({
   }
 
   async function loadHistory(nextFilters: HistoryFilters) {
+    const normalizedFilters = {
+      ...nextFilters,
+      page: Math.max(nextFilters.page, 1),
+      pageSize: Math.min(Math.max(nextFilters.pageSize, 1), 1000),
+    };
     setHistoryLoading(true);
     setHistoryStatus("");
     try {
       const params = new URLSearchParams();
-      if (nextFilters.query.trim()) params.set("query", nextFilters.query.trim());
-      if (nextFilters.externalCode.trim()) params.set("externalCode", nextFilters.externalCode.trim());
-      if (nextFilters.receiverName.trim()) params.set("receiverName", nextFilters.receiverName.trim());
-      if (nextFilters.submittedAt.trim()) params.set("submittedAt", nextFilters.submittedAt.trim());
-      params.set("page", String(nextFilters.page));
-      params.set("pageSize", String(nextFilters.pageSize));
+      if (normalizedFilters.query.trim()) params.set("query", normalizedFilters.query.trim());
+      if (normalizedFilters.externalCode.trim()) params.set("externalCode", normalizedFilters.externalCode.trim());
+      if (normalizedFilters.receiverName.trim()) params.set("receiverName", normalizedFilters.receiverName.trim());
+      if (normalizedFilters.submittedAt.trim()) params.set("submittedAt", normalizedFilters.submittedAt.trim());
+      params.set("page", String(normalizedFilters.page));
+      params.set("pageSize", String(normalizedFilters.pageSize));
       const response = await fetch(`/api/universal-import/shipments?${params.toString()}`);
       const data = (await response.json()) as ShipmentHistoryResponse;
       if (!response.ok || !data.records || typeof data.total !== "number") {
         throw new Error(data.error ?? "查询历史运单失败，请稍后重试。");
       }
       setHistoryData(data);
+      setHistoryFilters({
+        ...normalizedFilters,
+        page: data.page ?? normalizedFilters.page,
+        pageSize: data.pageSize ?? normalizedFilters.pageSize,
+      });
+      setSelectedHistoryId((current) =>
+        data.records?.some((record) => record.id === current) ? current : data.records?.[0]?.id ?? "",
+      );
     } catch (error) {
       setHistoryStatus(error instanceof Error ? error.message : "查询历史运单失败，请稍后重试。");
     } finally {
@@ -1670,30 +1834,36 @@ export function UniversalImportClient({
           shipmentCount: number;
           failedShipmentCount: number;
         };
+        results?: SubmitResult[];
       };
       if (!response.ok) {
         throw new Error(data.error ?? "提交导入失败，请稍后重试。");
       }
-      setSubmitProgress({
-        active: true,
-        value: 100,
-        label: "完成",
-        processed: data.summary?.successCount ?? draftRows.length,
-        total: draftRows.length,
-      });
-      setStatus(
-        `提交成功 ${data.summary?.successCount ?? draftRows.length} 行，生成 ${
-          data.summary?.shipmentCount ?? 0
-        } 个运单。`,
-      );
-      setSubmitSummary({
+      const summary = {
         successCount: data.summary?.successCount ?? draftRows.length,
         failCount: data.summary?.failCount ?? 0,
         shipmentCount: data.summary?.shipmentCount ?? 0,
         failedShipmentCount: data.summary?.failedShipmentCount ?? 0,
+      };
+      const failedResults = (data.results ?? []).filter((item) => item.status === "failed");
+      const statusMessage =
+        summary.failCount > 0
+          ? `提交完成：成功 ${summary.successCount} 行，失败 ${summary.failCount} 行；生成 ${summary.shipmentCount} 个运单，失败 ${summary.failedShipmentCount} 个。`
+          : `提交成功 ${summary.successCount} 行，生成 ${summary.shipmentCount} 个运单。`;
+      setSubmitProgress({
+        active: true,
+        value: 100,
+        label: summary.failCount > 0 ? "部分完成" : "完成",
+        processed: draftRows.length,
+        total: draftRows.length,
+      });
+      setStatus(statusMessage);
+      setSubmitSummary({
+        ...summary,
+        failedResults,
         submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
       });
-      pushToast(`成功提交 ${data.summary?.shipmentCount ?? 0} 个运单`, "success");
+      pushToast(statusMessage, summary.failCount > 0 ? "error" : "success");
       void loadHistory({ ...historyFilters, page: 1 });
       void loadHistoryCodes();
     } catch (error) {
@@ -2241,7 +2411,7 @@ export function UniversalImportClient({
                             <thead>
                               <tr>
                                 <th>出库单 / 外部编码</th>
-                                <th>收货信息示例</th>
+                                <th>收货信息概况</th>
                                 <th>SKU 行数</th>
                                 <th>SKU 件数合计</th>
                                 <th>来源行号</th>
@@ -2251,7 +2421,12 @@ export function UniversalImportClient({
                               {visibleAggregatedPreviewShipments.map((shipment) => (
                                 <tr key={shipment.key}>
                                   <td>{shipment.externalCode}</td>
-                                  <td>{shipment.receiverLabel}</td>
+                                  <td>
+                                    <div>{shipment.receiverLabel}</div>
+                                    {shipment.receiverGroupCount > 1 ? (
+                                      <span className="cell-hint">共 {shipment.receiverGroupCount} 组收货信息</span>
+                                    ) : null}
+                                  </td>
                                   <td>{shipment.skuCount}</td>
                                   <td>{shipment.quantityTotal || "-"}</td>
                                   <td>{shipment.rowIndexes.join(", ")}</td>
@@ -2292,8 +2467,17 @@ export function UniversalImportClient({
                           <tbody>
                             {visibleDraftRows.map((row, index) => {
                               const rowIssues = rowErrorsById.get(row.id) ?? [];
+                              const duplicateNotice = sameBatchDuplicateReport.noticesByRowId.get(row.id);
                               return (
-                                <tr key={row.id} className={rowIssues.length > 0 ? "has-error" : ""}>
+                                <tr
+                                  key={row.id}
+                                  className={[
+                                    rowIssues.length > 0 ? "has-error" : "",
+                                    duplicateNotice ? "has-duplicate-external-code" : "",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" ")}
+                                >
                                   <td className="checkbox-cell">
                                     <input
                                       type="checkbox"
@@ -2310,17 +2494,28 @@ export function UniversalImportClient({
                                   <td>{row.rowIndex || index + 1}</td>
                                   {UNIVERSAL_IMPORT_FIELDS.map((field) => {
                                     const issue = rowIssues.find((item) => item.field === field.key);
+                                    const showDuplicateNotice = field.key === "externalCode" && duplicateNotice;
                                     return (
                                       <td key={field.key}>
                                         <input
                                           ref={(node) => registerCellRef(row.id, field.key, node)}
-                                          className={`cell-input${issue ? " error" : ""}`}
+                                          className={[
+                                            "cell-input",
+                                            issue ? "error" : "",
+                                            showDuplicateNotice ? "duplicate-warning" : "",
+                                          ]
+                                            .filter(Boolean)
+                                            .join(" ")}
                                           value={row[field.key]}
                                           onChange={(event) => handleCellChange(row.id, field.key, event.target.value)}
                                           onKeyDown={(event) => handleCellKeyDown(event, row.id, field.key)}
                                           placeholder={field.label}
+                                          title={issue?.message ?? duplicateNotice ?? field.label}
                                         />
                                         {issue ? <span className="cell-error">{issue.message}</span> : null}
+                                        {showDuplicateNotice ? (
+                                          <span className="cell-warning">同批次重复，将按同一运单聚合</span>
+                                        ) : null}
                                       </td>
                                     );
                                   })}
@@ -2354,6 +2549,28 @@ export function UniversalImportClient({
                       </div>
                     ) : null}
 
+                    {hasSameBatchDuplicateExternalCodes ? (
+                      <div className="validation-summary-card warning">
+                        <div className="card-heading compact">
+                          <div>
+                            <p className="section-kicker">重复提示</p>
+                            <h3>同批次外部编码重复检测</h3>
+                          </div>
+                          <span className="warning-count-badge">{sameBatchDuplicateReport.summaries.length} 组重复</span>
+                        </div>
+                        <p className="footnote">
+                          同一外部编码会聚合为同一运单，系统已高亮对应行；请确认这些重复不是误填。
+                        </p>
+                        <div className="validation-summary-list">
+                          {sameBatchDuplicateReport.summaries.map((item) => (
+                            <div className="validation-summary-item warning" key={item}>
+                              {item}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
                     {hasBlockingErrors ? (
                       <div className="validation-summary-card">
                         <div className="card-heading compact">
@@ -2364,16 +2581,11 @@ export function UniversalImportClient({
                           <span className="error-count-badge">{rowErrorSummary.length} 个问题</span>
                         </div>
                         <div className="validation-summary-list">
-                          {visibleIssueSummary.map((item) => (
+                          {rowErrorSummary.map((item) => (
                             <div className="validation-summary-item" key={item}>
                               {item}
                             </div>
                           ))}
-                          {hiddenIssueCount > 0 ? (
-                            <div className="validation-summary-item muted">
-                              还有 {hiddenIssueCount} 个问题未展开，请先处理上方错误或导出后筛查。
-                            </div>
-                          ) : null}
                         </div>
                       </div>
                     ) : null}
@@ -2470,10 +2682,19 @@ export function UniversalImportClient({
                   </section>
                 </section>
 
-                <div className="toolbar" style={{ marginTop: 16 }}>
-                  <button type="button" className="primary-button" onClick={() => void submitImport()} disabled={submitting || draftRows.length === 0}>
+                <div className="toolbar submit-toolbar" style={{ marginTop: 16 }}>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void submitImport()}
+                    disabled={submitting || draftRows.length === 0 || hasBlockingErrors}
+                    title={hasBlockingErrors ? "存在未修正错误，请先处理后再提交。" : "提交下单"}
+                  >
                     {submitting ? "提交中..." : "提交下单"}
                   </button>
+                  {hasBlockingErrors ? (
+                    <span className="submit-blocked-hint">存在 {rowErrorSummary.length} 个未修正问题，请先修正后再提交。</span>
+                  ) : null}
                 </div>
 
                 {submitSummary ? (
@@ -2506,6 +2727,23 @@ export function UniversalImportClient({
                         <strong>{submitSummary.submittedAt}</strong>
                       </div>
                     </div>
+                    {submitSummary.failedResults.length > 0 ? (
+                      <div className="submit-failure-list">
+                        <div className="card-heading compact">
+                          <div>
+                            <p className="section-kicker">失败明细</p>
+                            <h3>需人工处理的运单</h3>
+                          </div>
+                        </div>
+                        {submitSummary.failedResults.map((item) => (
+                          <div className="submit-failure-item" key={`${item.externalCode}-${item.rowIndexes.join("-")}`}>
+                            <strong>{item.externalCode}</strong>
+                            <span>来源行：{item.rowIndexes.join("、")}；收货信息：{item.receiverLabel || "-"}</span>
+                            <p>{item.error || "入库失败，请检查该运单明细后重试。"}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </>
@@ -2629,6 +2867,12 @@ export function UniversalImportClient({
                   </div>
                   {selectedHistoryRecord ? (
                     <>
+                      {(() => {
+                        const receiverDetail = buildHistoryReceiverDetail(selectedHistoryRecord);
+                        const receiverLookup = buildHistoryReceiverLookup(selectedHistoryRecord);
+
+                        return (
+                          <>
                       <div className="overview-grid history-detail-grid">
                         <article className="overview-card">
                           <p>运单号</p>
@@ -2636,9 +2880,9 @@ export function UniversalImportClient({
                           <span>用于展示系统对单据主键的归并能力</span>
                         </article>
                         <article className="overview-card">
-                          <p>收货对象</p>
-                          <strong>{selectedHistoryRecord.receiverStore || selectedHistoryRecord.receiverName || "-"}</strong>
-                          <span>{selectedHistoryRecord.receiverPhone || selectedHistoryRecord.receiverAddress || "无补充信息"}</span>
+                          <p>收货信息</p>
+                          <strong>{receiverDetail.title}</strong>
+                          <span>{receiverDetail.detail}</span>
                         </article>
                         <article className="overview-card">
                           <p>来源文件</p>
@@ -2656,6 +2900,7 @@ export function UniversalImportClient({
                           <thead>
                             <tr>
                               <th>源行号</th>
+                              <th>收货信息</th>
                               <th>SKU 编码</th>
                               <th>SKU 名称</th>
                               <th>规格型号</th>
@@ -2666,6 +2911,7 @@ export function UniversalImportClient({
                             {selectedHistoryRecord.items.map((item) => (
                               <tr key={item.id}>
                                 <td>{item.sourceRowIndex}</td>
+                                <td>{receiverLookup.get(item.sourceRowIndex) ?? receiverDetail.title}</td>
                                 <td>{item.skuCode}</td>
                                 <td>{item.skuName}</td>
                                 <td>{item.skuSpec || "-"}</td>
@@ -2675,6 +2921,9 @@ export function UniversalImportClient({
                           </tbody>
                         </table>
                       </div>
+                          </>
+                        );
+                      })()}
                     </>
                   ) : (
                     <div className="empty-row history-empty-card">请选择一条运单查看明细。</div>
@@ -2684,6 +2933,22 @@ export function UniversalImportClient({
                 <div className="pagination-bar">
                   <div className="pagination-summary">
                     <span>共 {historyData.total ?? 0} 条</span>
+                    <label className="page-size-switcher">
+                      <span>每页</span>
+                      <select
+                        value={historyFilters.pageSize}
+                        onChange={(event) => {
+                          const pageSize = Number.parseInt(event.target.value, 10);
+                          void loadHistory({ ...historyFilters, page: 1, pageSize });
+                        }}
+                      >
+                        {[10, 20, 50, 100].map((size) => (
+                          <option value={size} key={size}>
+                            {size} 条
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <span>{historyStatus || " "}</span>
                   </div>
                   <div className="pagination-controls">

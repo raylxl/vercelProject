@@ -98,6 +98,7 @@ model UniversalImportShipment {
   sourceRowCount  Int
   raw             Json
   createdAt       DateTime                  @default(now())
+  receiverGroups  UniversalImportShipmentReceiverGroup[]
   items           UniversalImportShipmentItem[]
 
   @@index([batchId])
@@ -105,17 +106,38 @@ model UniversalImportShipment {
   @@index([receiverName])
 }
 
-model UniversalImportShipmentItem {
-  id          String                  @id @default(cuid())
-  shipmentId  String
-  shipment    UniversalImportShipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  sourceRowIndex Int
-  skuCode     String                  @db.VarChar(64)
-  skuName     String                  @db.VarChar(128)
-  skuQuantity Float
-  skuSpec     String?                 @db.VarChar(128)
-  raw         Json?
-  createdAt   DateTime                @default(now())
+model UniversalImportShipmentReceiverGroup {
+  id              String                    @id @default(cuid())
+  shipmentId      String
+  shipment        UniversalImportShipment   @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  receiverStore   String?                   @db.VarChar(128)
+  receiverName    String?                   @db.VarChar(64)
+  receiverPhone   String?                   @db.VarChar(32)
+  receiverAddress String?                   @db.VarChar(256)
+  note            String?                   @db.VarChar(256)
+  sourceRowCount  Int
+  raw             Json
+  createdAt       DateTime                  @default(now())
+  items           UniversalImportShipmentItem[]
 
   @@index([shipmentId])
+  @@index([receiverName])
+}
+
+model UniversalImportShipmentItem {
+  id              String                            @id @default(cuid())
+  shipmentId      String
+  shipment        UniversalImportShipment           @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  receiverGroupId String?
+  receiverGroup   UniversalImportShipmentReceiverGroup? @relation(fields: [receiverGroupId], references: [id], onDelete: SetNull)
+  sourceRowIndex  Int
+  skuCode         String                            @db.VarChar(64)
+  skuName         String                            @db.VarChar(128)
+  skuQuantity     Float
+  skuSpec         String?                           @db.VarChar(128)
+  raw             Json?
+  createdAt       DateTime                          @default(now())
+
+  @@index([shipmentId])
+  @@index([receiverGroupId])
 }

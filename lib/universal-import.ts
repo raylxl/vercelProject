@@ -54,6 +54,18 @@ export const UNIVERSAL_IMPORT_FIELDS = [
     aliases: ["SKU规格型号", "规格型号", "规格", "型号", "spec", "skuspec"],
   },
   {
+    key: "weight",
+    label: "重量",
+    required: false,
+    aliases: ["重量", "计费重量", "实际重量", "毛重", "kg", "weight"],
+  },
+  {
+    key: "temperatureZone",
+    label: "温层",
+    required: false,
+    aliases: ["温层", "温区", "温度要求", "运输温层", "temperature", "temp"],
+  },
+  {
     key: "note",
     label: "备注",
     required: false,
@@ -80,11 +92,6 @@ export type ExistingExternalCodeEntry = {
   rowIndex?: number;
   batchName?: string;
   batchCreatedAt?: string;
-};
-
-type GroupedRowEntry = {
-  rowIndex: number;
-  row: UniversalImportRow;
 };
 
 export const UNIVERSAL_IMPORT_FIELD_LABELS = Object.fromEntries(
@@ -187,6 +194,8 @@ export function createEmptyRow(rowIndex: number): UniversalImportRow {
     skuName: "",
     skuQuantity: "",
     skuSpec: "",
+    weight: "",
+    temperatureZone: "",
     note: "",
     rowIndex,
   };
@@ -206,53 +215,38 @@ function isPositiveNumber(value: string) {
   return Number.parseFloat(normalized) > 0;
 }
 
+function isTemperatureZoneLike(value: string) {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[℃°c]/g, "");
+
+  if (!normalized) {
+    return true;
+  }
+
+  if (
+    /^(?:常温|冷藏|冷冻|深冷|恒温|阴凉|鲜冷|冰鲜|干冰|ambient|chilled|frozen|deepfrozen|refrigerated)$/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (/^-?\d+(?:\.\d+)?(?:~-?\d+(?:\.\d+)?)?$/.test(normalized)) {
+    const [startText, endText = startText] = normalized.split("~");
+    const start = Number.parseFloat(startText);
+    const end = Number.parseFloat(endText);
+
+    return Number.isFinite(start) && Number.isFinite(end) && start >= -80 && end <= 40 && start <= end;
+  }
+
+  return false;
+}
+
 function normalizeExternalCode(value: string) {
   return value.trim().toLowerCase();
-}
-
-function normalizeGroupFieldValue(value: string) {
-  return value.trim();
-}
-
-function getDistinctNonEmptyValues(rows: GroupedRowEntry[], field: UniversalImportField) {
-  return Array.from(
-    new Set(
-      rows
-        .map((entry) => normalizeGroupFieldValue(entry.row[field]))
-        .filter(Boolean),
-    ),
-  );
-}
-
-function pushGroupConsistencyIssues(
-  issues: UniversalImportIssue[],
-  groupedEntries: GroupedRowEntry[],
-  field: UniversalImportField,
-  message: string,
-) {
-  groupedEntries.forEach((entry) => {
-    issues.push({
-      rowIndex: entry.rowIndex,
-      field,
-      message,
-    });
-  });
-}
-
-function getGroupedReceiverSummary(groupedEntries: GroupedRowEntry[]) {
-  const storeValues = getDistinctNonEmptyValues(groupedEntries, "receiverStore");
-  const nameValues = getDistinctNonEmptyValues(groupedEntries, "receiverName");
-  const phoneValues = getDistinctNonEmptyValues(groupedEntries, "receiverPhone");
-  const addressValues = getDistinctNonEmptyValues(groupedEntries, "receiverAddress");
-
-  return {
-    storeValues,
-    nameValues,
-    phoneValues,
-    addressValues,
-    hasStoreGroup: storeValues.length > 0,
-    hasReceiverGroup: nameValues.length > 0 && phoneValues.length > 0 && addressValues.length > 0,
-  };
 }
 
 export function countAggregatedShipments(rows: UniversalImportRow[]) {
@@ -304,22 +298,6 @@ export function validateImportRows(
 ) {
   const issues: UniversalImportIssue[] = [];
   const existingLookup = normalizeExistingExternalCodes(existingExternalCodes);
-  const groupedRows = new Map<string, GroupedRowEntry[]>();
-
-  rows.forEach((row, index) => {
-    const externalCode = row.externalCode.trim();
-    if (!externalCode) {
-      return;
-    }
-
-    const normalized = normalizeExternalCode(externalCode);
-    const current = groupedRows.get(normalized) ?? [];
-    current.push({
-      rowIndex: index + 1,
-      row,
-    });
-    groupedRows.set(normalized, current);
-  });
 
   rows.forEach((row, index) => {
     const rowNumber = index + 1;
@@ -327,7 +305,6 @@ export function validateImportRows(
 
     if (externalCode) {
       const normalized = normalizeExternalCode(externalCode);
-      const groupedEntries = groupedRows.get(normalized) ?? [];
       const existing = existingLookup.get(normalized);
 
       if (existing) {
@@ -370,40 +347,20 @@ export function validateImportRows(
     } else if (!isPositiveNumber(row.skuQuantity.trim())) {
       issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必须为正数" });
     }
-  });
 
-  groupedRows.forEach((groupedEntries) => {
-    const groupedReceiver = getGroupedReceiverSummary(groupedEntries);
+    const weight = row.weight?.trim() ?? "";
+    const temperatureZone = row.temperatureZone?.trim() ?? "";
 
-    if (!groupedReceiver.hasStoreGroup && !groupedReceiver.hasReceiverGroup) {
-      pushGroupConsistencyIssues(
-        issues,
-        groupedEntries,
-        "receiverStore",
-        "同一外部编码下的 SKU 需共享一组完整收货信息：收货门店，或收件人姓名 + 电话 + 地址",
-      );
+    if (weight && !isPositiveNumber(weight)) {
+      issues.push({ rowIndex: rowNumber, field: "weight", message: "必须为正数" });
     }
 
-    if (groupedReceiver.storeValues.length > 1) {
-      pushGroupConsistencyIssues(
-        issues,
-        groupedEntries,
-        "receiverStore",
-        "同一外部编码下的收货门店不一致，应共享同一组收货信息",
-      );
-    }
-
-    const receiverFields: UniversalImportField[] = ["receiverName", "receiverPhone", "receiverAddress"];
-    const inconsistentReceiverField = receiverFields.find(
-      (field) => getDistinctNonEmptyValues(groupedEntries, field).length > 1,
-    );
-    if (inconsistentReceiverField) {
-      pushGroupConsistencyIssues(
-        issues,
-        groupedEntries,
-        inconsistentReceiverField,
-        "同一外部编码下的收件人信息不一致，应共享同一组收货信息",
-      );
+    if (temperatureZone && !isTemperatureZoneLike(temperatureZone)) {
+      issues.push({
+        rowIndex: rowNumber,
+        field: "temperatureZone",
+        message: "不在允许范围内（常温/冷藏/冷冻/深冷，或 -80~40℃ 数值区间）",
+      });
     }
   });
 
