@@ -1244,6 +1244,18 @@ code {
   border: 1.5px dashed rgba(20, 196, 207, 0.45);
   border-radius: 14px;
   background: linear-gradient(180deg, #f8feff 0%, #eefbfdf2 100%);
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.upload-dropzone:hover,
+.upload-dropzone.active {
+  border-color: rgba(20, 196, 207, 0.85);
+  background:
+    radial-gradient(circle at top right, rgba(20, 196, 207, 0.18), transparent 38%),
+    linear-gradient(180deg, #f6feff 0%, #e9fbfd 100%);
+  box-shadow: 0 14px 34px rgba(7, 125, 155, 0.12);
+  transform: translateY(-1px);
 }
 
 .upload-dropzone strong {

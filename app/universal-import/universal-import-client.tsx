@@ -175,11 +175,21 @@ type ProgressState = {
   total: number;
 };
 
+function getProcessedCountFromProgress(value: number, total: number) {
+  if (total <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(total, Math.floor((value / 100) * total)));
+}
+
 type ParseFailureState = {
   message: string;
   fileName: string;
   fileType: SupportedImportFileType;
   ruleName: string;
+  fileSize: number;
+  lastModified: number;
 };
 
 type PerformanceSnapshot = {
@@ -231,6 +241,7 @@ const PREVIEW_INITIAL_RENDER_COUNT = 160;
 const PREVIEW_RENDER_BATCH_SIZE = 160;
 const MAX_VISIBLE_ISSUES = 200;
 const TAIL_SOURCE_PREFIX = "__tail__:";
+const SUPPORTED_FILE_EXTENSIONS = [".xlsx", ".xls", ".docx", ".pdf"] as const;
 
 const TOP_NAV_ITEMS = ["智能多格式批量下单系统"] as const;
 
@@ -445,6 +456,41 @@ function makeFormData(file: File, fileType: SupportedImportFileType, mapping: Un
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function getFileExtension(fileName: string) {
+  const dotIndex = fileName.lastIndexOf(".");
+  return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : "";
+}
+
+function detectFileTypeFromName(fileName: string): SupportedImportFileType | null {
+  const extension = getFileExtension(fileName);
+
+  if (extension === ".xlsx" || extension === ".xls") {
+    return "excel";
+  }
+
+  if (extension === ".docx") {
+    return "word";
+  }
+
+  if (extension === ".pdf") {
+    return "pdf";
+  }
+
+  return null;
 }
 
 function formatFileTypeLabel(value: string) {
@@ -705,6 +751,7 @@ export function UniversalImportClient({
   const [aiProviderLabel, setAiProviderLabel] = useState("");
   const [aiModelLabel, setAiModelLabel] = useState("");
   const [parseFailure, setParseFailure] = useState<ParseFailureState | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot | null>(null);
   const [submitSummary, setSubmitSummary] = useState<SubmitSummary | null>(null);
   const [transformConfigDrafts, setTransformConfigDrafts] = useState<Record<string, string>>({});
@@ -1039,10 +1086,40 @@ export function UniversalImportClient({
     }
   }
 
-  function handleFileSelected(file: File, nextFileType: SupportedImportFileType) {
+  function rejectFileSelection(message: string, file?: File) {
+    setStatus(message);
+    setRuleTestSummary("");
+    setParseFailure({
+      message,
+      fileName: file?.name ?? "未识别文件",
+      fileType,
+      ruleName: ruleNameInput.trim() || selectedRuleId || "尚未选择规则",
+      fileSize: file?.size ?? 0,
+      lastModified: file?.lastModified ?? Date.now(),
+    });
+    pushToast(message, "error");
+  }
+
+  function handleFileSelected(file: File) {
+    const detectedFileType = detectFileTypeFromName(file.name);
+    const extension = getFileExtension(file.name);
+
+    if (!detectedFileType) {
+      rejectFileSelection(
+        `文件格式错误：当前仅支持 ${SUPPORTED_FILE_EXTENSIONS.join("、")}，你上传的是 ${extension || "无扩展名文件"}。`,
+        file,
+      );
+      return;
+    }
+
+    if (file.size <= 0) {
+      rejectFileSelection("文件为空：请重新选择包含出库单内容的 Excel、Word 或 PDF 文件。", file);
+      return;
+    }
+
     setSelectedFile(file);
     setFileName(file.name);
-    setFileType(nextFileType);
+    setFileType(detectedFileType);
     setDraftRows([]);
     setPreviewRenderLimit(PREVIEW_INITIAL_RENDER_COUNT);
     setSelectedIds([]);
@@ -1055,11 +1132,22 @@ export function UniversalImportClient({
     setAiConfidenceReport([]);
     setAiProviderLabel("");
     setAiModelLabel("");
+    setParseFailure(null);
+    setParseProgress({
+      active: true,
+      value: 8,
+      label: "文件已读取，等待选择解析规则",
+      processed: getProcessedCountFromProgress(8, 100),
+      total: 100,
+    });
     setStatus(
       selectedRuleId
         ? "文件已上传，请点击“试解析选中规则”。"
         : "文件已上传，请先在“选择解析规则”中手动选择一条规则。",
     );
+    window.setTimeout(() => {
+      setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
+    }, 900);
   }
 
   function handleRuleSelect(ruleId: string) {
@@ -1138,11 +1226,24 @@ export function UniversalImportClient({
     setParseFailure(null);
     setPerformanceSnapshot(null);
     setSubmitSummary(null);
-    setParseProgress({ active: true, value: 12, label: "正在试解析文件...", processed: 0, total: 100 });
+    setParseProgress({
+      active: true,
+      value: 15,
+      label: "正在上传文件并读取结构...",
+      processed: getProcessedCountFromProgress(15, 100),
+      total: 100,
+    });
 
     try {
       const effectiveMapping = nextMapping ?? mapping;
       const effectiveRuleDsl = nextRuleDsl ?? ruleDsl;
+      setParseProgress({
+        active: true,
+        value: 38,
+        label: "正在按当前规则执行解析...",
+        processed: getProcessedCountFromProgress(38, 100),
+        total: 100,
+      });
       const response = await fetch(
         "/api/universal-import/templates/test",
         {
@@ -1156,6 +1257,13 @@ export function UniversalImportClient({
         throw new Error(data.error ?? "解析失败，请稍后重试。");
       }
 
+      setParseProgress({
+        active: true,
+        value: 76,
+        label: "正在生成预览并执行校验...",
+        processed: Math.min(data.previewRows.length, data.rowCount ?? data.previewRows.length),
+        total: data.rowCount ?? data.previewRows.length,
+      });
       const nextColumnOptions = buildColumnOptionsFromDocument(data.document, effectiveRuleDsl);
       applyRuleToState(
         data.previewRows,
@@ -1179,7 +1287,7 @@ export function UniversalImportClient({
         issueCount: data.issueCount ?? 0,
         renderMode: data.previewRows.length > PREVIEW_INITIAL_RENDER_COUNT ? "batched" : "full",
       });
-      setParseProgress({ active: true, value: 100, label: "完成", processed: data.rowCount ?? 0, total: data.rowCount ?? 0 });
+      setParseProgress({ active: true, value: 100, label: "解析完成", processed: data.rowCount ?? 0, total: data.rowCount ?? 0 });
     } catch (error) {
       const message = error instanceof Error ? error.message : "解析失败，请稍后重试。";
       setStatus(message);
@@ -1188,6 +1296,8 @@ export function UniversalImportClient({
         fileName: file.name,
         fileType: nextFileType,
         ruleName: ruleNameInput.trim() || "未命名规则",
+        fileSize: file.size,
+        lastModified: file.lastModified,
       });
     } finally {
       window.setTimeout(() => {
@@ -1358,6 +1468,12 @@ export function UniversalImportClient({
     setStatus(`已加载规则：${rule.ruleName}。请上传样例文件或重新试解析。`);
   }
 
+  function handleEditRule(rule: RuleRecord) {
+    handleApplyRule(rule);
+    setRuleStatus(`已进入规则“${rule.ruleName}”编辑状态，可直接修改字段映射和 Transform Config 后保存。`);
+    setTemplateInfo(`当前正在编辑规则：${rule.ruleName}`);
+  }
+
   async function handleDeleteRule(ruleId: string) {
     try {
       const response = await fetch(`/api/universal-import/templates/${ruleId}`, {
@@ -1512,15 +1628,20 @@ export function UniversalImportClient({
       active: true,
       value: 12,
       label: "正在提交...",
-      processed: 0,
+      processed: getProcessedCountFromProgress(12, draftRows.length),
       total: draftRows.length,
     });
 
     const timer = window.setInterval(() => {
-      setSubmitProgress((current) => ({
-        ...current,
-        value: Math.min(current.value + 8, 92),
-      }));
+      setSubmitProgress((current) => {
+        const nextValue = Math.min(current.value + 8, 92);
+
+        return {
+          ...current,
+          value: nextValue,
+          processed: getProcessedCountFromProgress(nextValue, current.total),
+        };
+      });
     }, 180);
 
     try {
@@ -1847,7 +1968,7 @@ export function UniversalImportClient({
                           onChange={(event) => {
                             const file = event.target.files?.[0];
                             if (file) {
-                              handleFileSelected(file, fileType);
+                              handleFileSelected(file);
                             }
                             event.target.value = "";
                           }}
@@ -1881,17 +2002,42 @@ export function UniversalImportClient({
                       </label>
                     </div>
 
-                    <div className="upload-dropzone" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
-                      event.preventDefault();
-                      const file = event.dataTransfer.files?.[0];
-                      if (file) {
-                        handleFileSelected(file, fileType);
-                      }
-                    }}>
+                    <div
+                      className={`upload-dropzone${dragActive ? " active" : ""}`}
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        setDragActive(true);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setDragActive(true);
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        setDragActive(false);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        setDragActive(false);
+                        const file = event.dataTransfer.files?.[0];
+                        if (file) {
+                          handleFileSelected(file);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          fileInputRef.current?.click();
+                        }
+                      }}
+                    >
                       <strong>拖拽 Excel / Word / PDF 文件到这里，或点击右上角按钮上传</strong>
-                      <span>上传后必须手动选择已保存规则，再执行试解析；系统不做自动匹配。</span>
+                      <span>支持 .xlsx / .xls / .docx / .pdf；上传后必须手动选择已保存规则或新建规则，系统不做自动匹配。</span>
                       {selectedFile ? (
-                        <span>当前样例文件：{selectedFile.name}</span>
+                        <span>当前样例文件：{selectedFile.name}（{formatFileSize(selectedFile.size)}，{formatFileTypeLabel(fileType)}）</span>
                       ) : (
                         <span>当前尚未上传样例文件。</span>
                       )}
@@ -1927,6 +2073,9 @@ export function UniversalImportClient({
                           <button type="button" className="secondary-button" onClick={() => setActiveTab("rules")}>
                             前往规则管理
                           </button>
+                          <button type="button" className="primary-button" onClick={() => void handleAiSuggest()} disabled={!selectedFile || aiSuggesting}>
+                            {aiSuggesting ? "AI 分析中..." : "重新生成 AI 规则"}
+                          </button>
                         </div>
                         <div className="result-summary-grid">
                           <div>
@@ -1942,10 +2091,21 @@ export function UniversalImportClient({
                             <strong>{formatFileTypeLabel(parseFailure.fileType)}</strong>
                           </div>
                           <div>
+                            <span>文件大小</span>
+                            <strong>{formatFileSize(parseFailure.fileSize)}</strong>
+                          </div>
+                          <div>
+                            <span>最后修改</span>
+                            <strong>{new Date(parseFailure.lastModified).toLocaleString("zh-CN", { hour12: false })}</strong>
+                          </div>
+                          <div>
                             <span>当前规则</span>
                             <strong>{parseFailure.ruleName}</strong>
                           </div>
                         </div>
+                        <p>
+                          如果是格式或编码问题，请重新上传受支持的文件；如果是规则无法解析，请进入规则管理新建规则，或先让 AI 分析当前文件生成推荐规则后再人工微调。
+                        </p>
                       </div>
                     ) : null}
 
@@ -2081,7 +2241,7 @@ export function UniversalImportClient({
                             <thead>
                               <tr>
                                 <th>出库单 / 外部编码</th>
-                                <th>共享收货信息</th>
+                                <th>收货信息示例</th>
                                 <th>SKU 行数</th>
                                 <th>SKU 件数合计</th>
                                 <th>来源行号</th>
@@ -2577,7 +2737,7 @@ export function UniversalImportClient({
                         确认 AI 建议并保存为规则
                       </button>
                       <button type="button" className="primary-button" onClick={() => void handleSaveCurrentRule()}>新建规则</button>
-                      <button type="button" className="secondary-button" onClick={() => void handleUpdateSelectedRule()} disabled={!selectedRuleId}>更新选中规则</button>
+                      <button type="button" className="secondary-button" onClick={() => void handleUpdateSelectedRule()} disabled={!selectedRuleId}>保存当前编辑规则</button>
                       <button type="button" className="secondary-button" onClick={() => void handleTestCurrentRule()} disabled={!selectedFile}>试解析当前规则</button>
                     </div>
 
@@ -2724,8 +2884,8 @@ export function UniversalImportClient({
                                     <button type="button" className="text-link-button" onClick={() => handleApplyRule(rule)}>应用</button>
                                     <button type="button" className="text-link-button" onClick={() => void handleCopyRule(rule)}>复制</button>
                                     <button type="button" className="text-link-button" onClick={() => {
-                                      handleApplyRule(rule);
-                                    }}>选中</button>
+                                      handleEditRule(rule);
+                                    }}>编辑</button>
                                     <button type="button" className="text-link-button" onClick={() => void handleDeleteRule(rule.id)}>删除</button>
                                   </div>
                                 </td>

@@ -189,6 +189,18 @@ function isUnitLike(value: string) {
   return /^(?:件|瓶|包|箱|盒|袋|桶|套|个|支|条|片|斤|kg|g|l|ml)$/i.test(value.trim());
 }
 
+function isRepeatedTableHeaderValue(value: string) {
+  return /^(?:物品编码|商品编码|SKU编码|编码|物品名称|商品名称|SKU名称|品名|规格型号|规格|订货单位|发货数量|数量|备注)$/i.test(value.trim());
+}
+
+function isRepeatedTableHeaderRow(values: Partial<Record<UniversalImportField, string>>) {
+  const populated = [values.skuCode, values.skuName, values.skuQuantity]
+    .map((value) => normalizeCell(value))
+    .filter(Boolean);
+
+  return populated.length > 0 && populated.every(isRepeatedTableHeaderValue);
+}
+
 function splitNameAndSpec(value: string) {
   const normalized = value.trim();
   const parts = normalized.split(/\s+/).filter(Boolean);
@@ -804,8 +816,9 @@ function parseRowsByMapping(
   const skipRowRegex = createRegex(asString(config?.skipRowRegex), "i");
   const requiredFields = asStringArray(config?.requiredRowFields) as UniversalImportField[];
   const output: UniversalImportRow[] = [];
+  const sourceRows = rows.slice(dataStartRowIndex, dataEndRowIndex);
 
-  rows.slice(dataStartRowIndex, dataEndRowIndex).forEach((sourceRow) => {
+  sourceRows.forEach((sourceRow, relativeIndex) => {
     const joined = sourceRow.join(" ");
     if (!joined.trim() || skipRowRegex?.test(joined)) {
       return;
@@ -846,9 +859,19 @@ function parseRowsByMapping(
     if (!isPositiveQuantity(normalizeCell(values.skuQuantity))) {
       const quantityCandidates = sourceRow.length > 1 ? sourceRow.slice(1) : sourceRow;
       const lastPositiveQuantity = quantityCandidates.slice().reverse().find((cell) => isPositiveQuantity(cell));
+      const nextRow = sourceRows[relativeIndex + 1] ?? [];
+      const nextRowContinuationQuantity = nextRow.some(isSkuCodeLike)
+        ? ""
+        : nextRow.slice().reverse().find((cell) => isPositiveQuantity(cell));
       if (lastPositiveQuantity) {
         values.skuQuantity = lastPositiveQuantity;
+      } else if (nextRowContinuationQuantity) {
+        values.skuQuantity = nextRowContinuationQuantity;
       }
+    }
+
+    if (isRepeatedTableHeaderRow(values)) {
+      return;
     }
 
     const hasRequiredValues = requiredFields.length
