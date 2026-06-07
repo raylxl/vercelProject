@@ -66,8 +66,6 @@ const RESPONSE_SCHEMA = {
         skuName: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
         skuQuantity: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
         skuSpec: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
-        weight: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
-        temperatureZone: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
         note: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
       },
     },

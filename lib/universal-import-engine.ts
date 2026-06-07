@@ -332,9 +332,6 @@ function parseInlineKeyValueCell(value: unknown) {
 
 function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): UniversalImportRow {
   const normalizedValues = { ...values };
-  if (normalizedValues.weight) {
-    normalizedValues.weight = normalizeNumericImportValue(normalizedValues.weight);
-  }
   if (normalizedValues.skuQuantity) {
     normalizedValues.skuQuantity = normalizeNumericImportValue(normalizedValues.skuQuantity);
   }
@@ -1455,7 +1452,7 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
     rows.forEach((row) => {
       configuredDefaults.forEach((field) => {
         const rawValue = normalizeCell(rule.defaults?.[field]);
-        const value = field === "weight" || field === "skuQuantity" ? normalizeNumericImportValue(rawValue) : rawValue;
+        const value = field === "skuQuantity" ? normalizeNumericImportValue(rawValue) : rawValue;
         if (value && !normalizeCell(row[field])) {
           row[field] = value;
         }

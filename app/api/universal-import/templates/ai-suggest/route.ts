@@ -515,8 +515,6 @@ const KEY_VALUE_FIELD_ALIASES: Record<UniversalImportField, string[]> = {
   skuName: [],
   skuQuantity: [],
   skuSpec: [],
-  weight: ["重量", "计费重量", "实际重量", "毛重"],
-  temperatureZone: ["温层", "温区", "温度要求", "运输温层"],
   note: ["备注", "收货机构备注", "附加说明", "说明"],
 };
 

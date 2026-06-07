@@ -322,8 +322,6 @@ function createEmptyDraftRow(rowIndex: number): DraftRow {
     skuName: "",
     skuQuantity: "",
     skuSpec: "",
-    weight: "",
-    temperatureZone: "",
     note: "",
     rowIndex,
     id: createRowId(),
@@ -2269,27 +2267,27 @@ export function UniversalImportClient({
                         }
                       }}
                     >
-                      <strong>拖拽 Excel / Word / PDF 文件到这里，或点击右上角按钮上传</strong>
-                      <span>支持 .xlsx / .xls / .docx / .pdf；上传后必须手动选择已保存规则或新建规则，系统不做自动匹配。</span>
+                      <strong>第 1 步：上传样例文件（Excel / Word / PDF）</strong>
+                      <span>支持 .xlsx / .xls / .docx / .pdf；系统不会自动匹配规则，请在下方手动选择已有规则，或进入规则管理新建规则。</span>
                       {selectedFile ? (
-                        <span>当前样例文件：{selectedFile.name}（{formatFileSize(selectedFile.size)}，{formatFileTypeLabel(fileType)}）</span>
+                        <span>当前样例：{selectedFile.name}（{formatFileSize(selectedFile.size)}，{formatFileTypeLabel(fileType)}）</span>
                       ) : (
-                        <span>当前尚未上传样例文件。</span>
+                        <span>当前尚未上传样例文件，请先完成第 1 步。</span>
                       )}
                     </div>
 
-                    <div className="toolbar" style={{ marginTop: 16 }}>
+                    <div className="toolbar import-action-toolbar" style={{ marginTop: 16 }}>
                       <button type="button" className="primary-button" onClick={() => void handleAiSuggest()} disabled={!selectedFile || aiSuggesting}>
                         {aiSuggesting ? "AI 生成中..." : "AI 生成规则建议"}
                       </button>
                       <button type="button" className="secondary-button" onClick={() => void handleTestCurrentRule()} disabled={!selectedFile || !selectedRuleId}>
                         试解析选中规则
                       </button>
-                      <button type="button" className="tool-button" onClick={addEmptyRow}>
-                        + 新增行
-                      </button>
-                      <button type="button" className="tool-button" onClick={exportPreview} disabled={draftRows.length === 0}>
+                      <button type="button" className="tool-button quiet" onClick={exportPreview} disabled={draftRows.length === 0}>
                         导出 Excel
+                      </button>
+                      <button type="button" className="tool-button quiet" onClick={addEmptyRow}>
+                        + 新增行
                       </button>
                     </div>
 
@@ -2407,7 +2405,7 @@ export function UniversalImportClient({
                                 className="mapping-default-input"
                                 value={defaultValue}
                                 onChange={(event) => handleDefaultValueChange(field.key, event.target.value)}
-                                placeholder={field.key === "temperatureZone" ? "默认值，如：常温" : "默认值：文件无此字段时补齐"}
+                                placeholder="默认值：文件无此字段时补齐"
                               />
                               <small className="mapping-hint">
                                 {aiStatus.detail}；下拉用于选择表格列/尾部信息，默认值会补齐空字段。
@@ -2465,15 +2463,21 @@ export function UniversalImportClient({
                     {draftRows.length === 0 ? (
                       <div className="empty-state-card with-illustration">
                         <p className="section-kicker">空状态</p>
-                        <h3>还没有生成结构化预览数据</h3>
+                        <h3>还没有可提交的结构化预览</h3>
                         <p>
-                          先上传 Excel / Word / PDF 样例文件，再手动选择已有规则，或点击“AI 生成规则建议”后人工确认字段映射并试解析。
+                          按考试主流程依次完成样例上传、规则确认和试解析，系统才会在这里生成结构化运单预览。
                         </p>
+                        <div className="empty-state-steps">
+                          <span className="empty-state-step">1. 上传样例文件</span>
+                          <span className="empty-state-step">2. 选择规则或生成 AI 建议</span>
+                          <span className="empty-state-step">3. 试解析并确认字段映射</span>
+                        </div>
+                        <p className="empty-state-tip">规则始终由你手动选择，系统不会自动匹配。</p>
                         <div className="toolbar" style={{ marginBottom: 0 }}>
-                          <button type="button" className="secondary-button" onClick={() => fileInputRef.current?.click()}>
+                          <button type="button" className="primary-button" onClick={() => fileInputRef.current?.click()}>
                             选择样例文件
                           </button>
-                          <button type="button" className="tool-button" onClick={() => setActiveTab("rules")}>
+                          <button type="button" className="secondary-button" onClick={() => setActiveTab("rules")}>
                             去规则管理新建规则
                           </button>
                         </div>
@@ -3072,12 +3076,12 @@ export function UniversalImportClient({
                     </div>
 
                     <div className="toolbar rule-editor-toolbar rule-editor-toolbar-sticky" style={{ marginTop: 16 }}>
-                      <button type="button" className="primary-button" onClick={() => void handleConfirmAiSuggestionSave()} disabled={!selectedFile || headers.length === 0}>
-                        确认 AI 建议并保存为规则
-                      </button>
-                      <button type="button" className="primary-button" onClick={() => void handleSaveCurrentRule()}>新建规则</button>
-                      <button type="button" className="secondary-button" onClick={() => void handleUpdateSelectedRule()} disabled={!selectedRuleId}>保存当前编辑规则</button>
+                      <button type="button" className="tool-button quiet" onClick={() => void handleSaveCurrentRule()}>新建空白规则</button>
                       <button type="button" className="secondary-button" onClick={() => void handleTestCurrentRule()} disabled={!selectedFile}>试解析当前规则</button>
+                      <button type="button" className="secondary-button accent" onClick={() => void handleConfirmAiSuggestionSave()} disabled={!selectedFile || headers.length === 0}>
+                        采用 AI 建议并保存规则
+                      </button>
+                      <button type="button" className="primary-button" onClick={() => void handleUpdateSelectedRule()} disabled={!selectedRuleId}>保存当前编辑规则</button>
                     </div>
 
                     <div className="status-panel">
@@ -3127,7 +3131,7 @@ export function UniversalImportClient({
                                   className="mapping-default-input"
                                   value={defaultValue}
                                   onChange={(event) => handleDefaultValueChange(field.key, event.target.value)}
-                                  placeholder={field.key === "temperatureZone" ? "默认值，如：常温" : "默认值：文件无此字段时补齐"}
+                                  placeholder="默认值：文件无此字段时补齐"
                                 />
                                 <small className="mapping-hint">
                                   {aiStatus.detail}；下拉用于选择表格列/尾部信息，默认值会补齐空字段。
@@ -3218,7 +3222,7 @@ export function UniversalImportClient({
                           {ruleLoading ? (
                             <tr><td colSpan={6} className="empty-row">正在加载规则列表...</td></tr>
                           ) : ruleList.length === 0 ? (
-                            <tr><td colSpan={6} className="empty-row">暂无已保存规则。</td></tr>
+                            <tr><td colSpan={6} className="empty-row">暂无已保存规则，可点击上方“新建空白规则”开始配置。</td></tr>
                           ) : (
                             ruleList.map((rule) => (
                               <tr key={rule.id} className={selectedRuleId === rule.id ? "has-error" : ""}>
@@ -3228,7 +3232,7 @@ export function UniversalImportClient({
                                 <td>{rule._count?.batches ?? 0}</td>
                                 <td>{new Date(rule.updatedAt).toLocaleString("zh-CN", { hour12: false })}</td>
                                 <td>
-                                  <div className="toolbar">
+                                  <div className="toolbar table-action-toolbar">
                                     <button type="button" className="text-link-button" onClick={() => handleApplyRule(rule)}>应用</button>
                                     <button type="button" className="text-link-button" onClick={() => void handleCopyRule(rule)}>复制</button>
                                     <button type="button" className="text-link-button" onClick={() => {

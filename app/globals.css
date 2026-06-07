@@ -490,18 +490,18 @@ code {
 }
 
 .workspace-header {
-  margin-bottom: 18px;
+  margin-bottom: 16px;
 }
 
 .workspace-breadcrumb {
   margin: 0 0 8px;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
 }
 
 .workspace-header h1 {
   margin: 0;
-  font-size: 2rem;
+  font-size: 1.92rem;
   letter-spacing: -0.03em;
 }
 
@@ -529,7 +529,7 @@ code {
   display: inline-flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-radius: 10px;
   border: 1px solid var(--line);
   background: #fff;
@@ -852,8 +852,8 @@ code {
 
 .toolbar {
   flex-wrap: wrap;
-  gap: 12px;
-  margin: 16px 0 14px;
+  gap: 10px;
+  margin: 14px 0 12px;
 }
 
 .primary-button,
@@ -874,8 +874,8 @@ code {
 .primary-button,
 .secondary-button {
   min-width: 96px;
-  min-height: 40px;
-  padding: 0 16px;
+  min-height: 38px;
+  padding: 0 15px;
   font-weight: 700;
 }
 
@@ -890,17 +890,28 @@ code {
   border: 1px solid var(--line);
 }
 
+.secondary-button.accent {
+  color: var(--accent-strong);
+  border-color: rgba(20, 196, 207, 0.28);
+  background: #f6fcfd;
+}
+
 .tool-button {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  min-height: 38px;
-  padding: 0 14px;
+  min-height: 36px;
+  padding: 0 13px;
   color: var(--text);
   background: #fff;
   border: 1px solid var(--line);
   font-size: 0.94rem;
   font-weight: 600;
+}
+
+.tool-button.quiet {
+  color: #476170;
+  background: #f8fbfd;
 }
 
 .tool-button.danger {
@@ -933,6 +944,7 @@ code {
   background: transparent;
   cursor: pointer;
   font-weight: 700;
+  font-size: 0.88rem;
 }
 
 .text-link-button:hover {
@@ -988,9 +1000,12 @@ code {
 }
 
 .data-table thead th {
-  background: #f7fbfe;
-  color: var(--text);
+  padding: 13px 10px;
+  background: #f4f9fc;
+  color: #355362;
   font-weight: 700;
+  font-size: 0.88rem;
+  letter-spacing: 0.01em;
 }
 
 .data-table tbody tr:hover {
@@ -1013,6 +1028,8 @@ code {
 .pagination-summary {
   color: var(--muted);
   flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.88rem;
 }
 
 .page-button {
@@ -1580,15 +1597,15 @@ code {
 .preview-render-toolbar {
   display: flex;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
   margin-top: 14px;
-  padding: 14px 16px;
+  padding: 13px 15px;
   border: 1px solid rgba(20, 196, 207, 0.2);
   border-radius: 12px;
   background: #f7fcfd;
   color: #31566a;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   line-height: 1.55;
 }
 
@@ -1673,7 +1690,7 @@ code {
 .result-summary-card,
 .parse-failure-card {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   padding: 18px;
   border-radius: 12px;
   border: 1px solid rgba(4, 116, 146, 0.12);
@@ -1685,7 +1702,7 @@ code {
 .result-summary-card h3,
 .parse-failure-card h3 {
   margin: 0;
-  font-size: 1.16rem;
+  font-size: 1.12rem;
 }
 
 .empty-state-card p,
@@ -1697,7 +1714,31 @@ code {
 .empty-state-card > p:last-of-type,
 .parse-failure-card > p:last-of-type {
   color: var(--muted);
-  line-height: 1.7;
+  line-height: 1.65;
+}
+
+.empty-state-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.empty-state-step {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(20, 196, 207, 0.18);
+  background: rgba(20, 196, 207, 0.06);
+  color: #35606e;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.empty-state-tip {
+  color: #56727f;
+  font-size: 0.88rem;
 }
 
 .result-summary-grid,
@@ -1740,7 +1781,7 @@ code {
   position: sticky;
   bottom: 12px;
   z-index: 12;
-  padding: 14px 16px;
+  padding: 12px 14px;
   border: 1px solid rgba(4, 116, 146, 0.12);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.96);
@@ -1752,12 +1793,23 @@ code {
   position: sticky;
   top: 14px;
   z-index: 14;
-  padding: 14px 16px;
+  padding: 12px 14px;
   border: 1px solid rgba(4, 116, 146, 0.12);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(10px);
   box-shadow: 0 8px 20px rgba(8, 63, 89, 0.06);
+}
+
+.import-action-toolbar,
+.rule-editor-toolbar {
+  align-items: center;
+}
+
+.table-action-toolbar {
+  justify-content: center;
+  gap: 12px;
+  margin: 0;
 }
 
 .submit-blocked-hint {
@@ -1824,8 +1876,8 @@ code {
   position: sticky;
   top: 0;
   z-index: 3;
-  background: #f7fbfe;
-  box-shadow: 0 1px 0 #dfeaf1;
+  background: #f4f9fc;
+  box-shadow: 0 1px 0 #d9e8f1;
 }
 
 .cell-input {
@@ -1937,7 +1989,7 @@ code {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
   gap: 12px;
-  margin: 18px 0 14px;
+  margin: 16px 0 12px;
   align-items: end;
 }
 

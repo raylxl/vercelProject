@@ -54,18 +54,6 @@ export const UNIVERSAL_IMPORT_FIELDS = [
     aliases: ["SKU规格型号", "规格型号", "规格", "型号", "spec", "skuspec"],
   },
   {
-    key: "weight",
-    label: "重量",
-    required: false,
-    aliases: ["重量", "计费重量", "实际重量", "毛重", "kg", "weight"],
-  },
-  {
-    key: "temperatureZone",
-    label: "温层",
-    required: false,
-    aliases: ["温层", "温区", "温度要求", "运输温层", "temperature", "temp"],
-  },
-  {
     key: "note",
     label: "备注",
     required: false,
@@ -202,8 +190,6 @@ export function createEmptyRow(rowIndex: number): UniversalImportRow {
     skuName: "",
     skuQuantity: "",
     skuSpec: "",
-    weight: "",
-    temperatureZone: "",
     note: "",
     rowIndex,
   };
@@ -238,36 +224,6 @@ function isPositiveNumber(value: string) {
   }
 
   return Number.parseFloat(normalized) > 0;
-}
-
-function isTemperatureZoneLike(value: string) {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "")
-    .replace(/[℃°c]/g, "");
-
-  if (!normalized) {
-    return true;
-  }
-
-  if (
-    /^(?:常温|冷藏|冷冻|深冷|恒温|阴凉|鲜冷|冰鲜|干冰|ambient|chilled|frozen|deepfrozen|refrigerated)$/.test(
-      normalized,
-    )
-  ) {
-    return true;
-  }
-
-  if (/^-?\d+(?:\.\d+)?(?:~-?\d+(?:\.\d+)?)?$/.test(normalized)) {
-    const [startText, endText = startText] = normalized.split("~");
-    const start = Number.parseFloat(startText);
-    const end = Number.parseFloat(endText);
-
-    return Number.isFinite(start) && Number.isFinite(end) && start >= -80 && end <= 40 && start <= end;
-  }
-
-  return false;
 }
 
 function normalizeExternalCode(value: string) {
@@ -373,20 +329,6 @@ export function validateImportRows(
       issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必须为正数" });
     }
 
-    const weight = row.weight?.trim() ?? "";
-    const temperatureZone = row.temperatureZone?.trim() ?? "";
-
-    if (weight && !isPositiveNumber(weight)) {
-      issues.push({ rowIndex: rowNumber, field: "weight", message: "必须为正数" });
-    }
-
-    if (temperatureZone && !isTemperatureZoneLike(temperatureZone)) {
-      issues.push({
-        rowIndex: rowNumber,
-        field: "temperatureZone",
-        message: "不在允许范围内（常温/冷藏/冷冻/深冷，或 -80~40℃ 数值区间）",
-      });
-    }
   });
 
   const issuesByRow = new Map<number, UniversalImportIssue[]>();
