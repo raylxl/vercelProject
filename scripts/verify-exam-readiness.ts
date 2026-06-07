@@ -292,7 +292,9 @@ function isDenseTableHeaderRow(row: string[]) {
     const normalized = normalize(cell);
     return (
       isLikelyKeyValueLabel(cell) ||
-      /^(?:序号|行号|分类|品牌|单位|仓库|日期|备注|状态|批次|规格|型号|金额|单价|成本|体积|重量)$/.test(normalized)
+      /(?:序号|行号|分类|品牌|单位|仓库|日期|备注|状态|批次|规格|型号|金额|单价|成本|体积|重量|数量|电话|地址|联系人|机构|单号)/.test(
+        normalized,
+      )
     );
   }).length;
 

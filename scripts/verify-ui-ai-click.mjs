@@ -8,9 +8,9 @@ const CHROME_PATH = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 
 function pickDemoFile() {
   const files = fs.readdirSync(DEMO_DIR);
-  const target =
-    files.find((name) => name.includes("海口")) ||
-    files.find((name) => name.toLowerCase().endsWith(".xlsx"));
+  const target = files
+    .filter((name) => /\.(xlsx|xls|docx|doc|pdf)$/i.test(name))
+    .sort((left, right) => left.localeCompare(right, "zh-CN"))[0];
 
   if (!target) {
     throw new Error("No demo file found");
