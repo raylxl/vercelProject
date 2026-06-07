@@ -2903,29 +2903,41 @@ export function UniversalImportClient({
                   </article>
                 </div>
 
-                <div className="history-filters">
-                  <label className="search-field">
-                    <span>关键字</span>
-                    <input value={historyFilters.query} onChange={(event) => setHistoryFilters((current) => ({ ...current, query: event.target.value }))} placeholder="外部编码 / 收件人 / 门店 / 文件名" />
-                  </label>
-                  <label className="search-field">
-                    <span>外部编码</span>
-                    <input value={historyFilters.externalCode} onChange={(event) => setHistoryFilters((current) => ({ ...current, externalCode: event.target.value }))} placeholder="支持精确或模糊搜索" />
-                  </label>
-                  <label className="search-field">
-                    <span>收件人姓名</span>
-                    <input value={historyFilters.receiverName} onChange={(event) => setHistoryFilters((current) => ({ ...current, receiverName: event.target.value }))} placeholder="支持模糊搜索" />
-                  </label>
-                  <label className="search-field">
-                    <span>提交日期</span>
-                    <input type="date" value={historyFilters.submittedAt} onChange={(event) => setHistoryFilters((current) => ({ ...current, submittedAt: event.target.value }))} />
-                  </label>
-                  <div className="search-actions">
-                    <button type="button" className="primary-button" onClick={() => void loadHistory({ ...historyFilters, page: 1 })}>查询</button>
-                    <button type="button" className="secondary-button" onClick={() => {
-                      setHistoryFilters(DEFAULT_HISTORY_FILTERS);
-                      void loadHistory(DEFAULT_HISTORY_FILTERS);
-                    }}>重置</button>
+                <div className="history-filter-panel">
+                  <div className="history-filter-panel-header">
+                    <div>
+                      <p className="section-kicker">筛选区</p>
+                      <h3>按外部编码、收件人和提交日期检索历史运单</h3>
+                    </div>
+                    <div className="history-filter-tips">
+                      <span className="history-filter-tip">支持分页查看</span>
+                      <span className="history-filter-tip">支持答辩演示检索过程</span>
+                    </div>
+                  </div>
+                  <div className="history-filters history-filters-panel">
+                    <label className="search-field">
+                      <span>关键字</span>
+                      <input value={historyFilters.query} onChange={(event) => setHistoryFilters((current) => ({ ...current, query: event.target.value }))} placeholder="外部编码 / 收件人 / 门店 / 文件名" />
+                    </label>
+                    <label className="search-field">
+                      <span>外部编码</span>
+                      <input value={historyFilters.externalCode} onChange={(event) => setHistoryFilters((current) => ({ ...current, externalCode: event.target.value }))} placeholder="支持精确或模糊搜索" />
+                    </label>
+                    <label className="search-field">
+                      <span>收件人姓名</span>
+                      <input value={historyFilters.receiverName} onChange={(event) => setHistoryFilters((current) => ({ ...current, receiverName: event.target.value }))} placeholder="支持模糊搜索" />
+                    </label>
+                    <label className="search-field">
+                      <span>提交日期</span>
+                      <input type="date" value={historyFilters.submittedAt} onChange={(event) => setHistoryFilters((current) => ({ ...current, submittedAt: event.target.value }))} />
+                    </label>
+                    <div className="search-actions history-search-actions">
+                      <button type="button" className="primary-button" onClick={() => void loadHistory({ ...historyFilters, page: 1 })}>查询</button>
+                      <button type="button" className="secondary-button" onClick={() => {
+                        setHistoryFilters(DEFAULT_HISTORY_FILTERS);
+                        void loadHistory(DEFAULT_HISTORY_FILTERS);
+                      }}>重置</button>
+                    </div>
                   </div>
                 </div>
 
@@ -2945,7 +2957,7 @@ export function UniversalImportClient({
                       {historyLoading ? (
                         <tr><td colSpan={6} className="empty-row">正在加载历史数据...</td></tr>
                       ) : (historyData.records ?? []).length === 0 ? (
-                        <tr><td colSpan={6} className="empty-row">暂无历史运单记录。</td></tr>
+                        <tr><td colSpan={6} className="empty-row">当前筛选条件下暂无历史运单，可调整筛选条件后重试。</td></tr>
                       ) : (
                         historyData.records?.map((record) => (
                           <tr
@@ -2969,9 +2981,12 @@ export function UniversalImportClient({
                 <div className="history-detail-card">
                   <div className="card-heading">
                     <div>
-                      <p className="section-kicker">明细证据</p>
-                      <h3>选中运单的导入结果详情</h3>
+                      <p className="section-kicker">详情区</p>
+                      <h3>选中运单明细与导入证据</h3>
                     </div>
+                    <span className={`history-pill${selectedHistoryRecord ? "" : " muted"}`}>
+                      {selectedHistoryRecord ? `当前查看：${selectedHistoryRecord.externalCode}` : "等待选择运单"}
+                    </span>
                   </div>
                   {selectedHistoryRecord ? (
                     <>
@@ -2981,6 +2996,9 @@ export function UniversalImportClient({
 
                         return (
                           <>
+                      <p className="history-detail-caption">
+                        当前展示该运单的收货信息、来源文件和 SKU 明细，可用于演示导入结果可追溯。
+                      </p>
                       <div className="overview-grid history-detail-grid">
                         <article className="overview-card">
                           <p>运单号</p>
@@ -3034,7 +3052,16 @@ export function UniversalImportClient({
                       })()}
                     </>
                   ) : (
-                    <div className="empty-row history-empty-card">请选择一条运单查看明细。</div>
+                    <div className="history-empty-card with-illustration">
+                      <p className="section-kicker">空状态</p>
+                      <h3>请选择一条历史运单查看详情</h3>
+                      <p>点击上方列表中的任意一条运单后，这里会展示收货信息、来源文件和 SKU 明细。</p>
+                      <div className="empty-state-steps">
+                        <span className="empty-state-step">1. 先筛选或查询</span>
+                        <span className="empty-state-step">2. 再点选历史运单</span>
+                        <span className="empty-state-step">3. 查看导入证据</span>
+                      </div>
+                    </div>
                   )}
                 </div>
 

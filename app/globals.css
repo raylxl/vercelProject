@@ -1993,6 +1993,56 @@ code {
   align-items: end;
 }
 
+.history-filter-panel {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #deebf2;
+  border-radius: 12px;
+  background: #fbfdff;
+}
+
+.history-filter-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.history-filter-panel-header h3 {
+  margin: 8px 0 0;
+  font-size: 1.08rem;
+}
+
+.history-filter-tips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.history-filter-tip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eef8fa;
+  color: #35606e;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.history-filters-panel {
+  margin: 0;
+}
+
+.history-search-actions {
+  padding: 8px 10px;
+  border: 1px solid rgba(4, 116, 146, 0.1);
+  border-radius: 10px;
+  background: #f8fbfd;
+}
+
 .history-overview-grid {
   margin: 14px 0 18px;
 }
@@ -2036,6 +2086,11 @@ code {
   color: #0b7b88;
 }
 
+.history-pill.muted {
+  background: #eef4f7;
+  color: #69808f;
+}
+
 .history-batch-card > p {
   margin: 0 0 10px;
   color: var(--muted);
@@ -2076,6 +2131,12 @@ code {
   margin-top: 18px;
 }
 
+.history-detail-caption {
+  margin: 0 0 14px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
 .history-detail-grid {
   margin-bottom: 16px;
 }
@@ -2086,8 +2147,13 @@ code {
 }
 
 .history-empty-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(4, 116, 146, 0.12);
   border-radius: 12px;
   background: #f8fbfd;
+  box-shadow: var(--shadow-sm);
 }
 
 @media (max-width: 1480px) {
