@@ -214,8 +214,25 @@ function isPhoneLike(value: string) {
   return /^(?:1\d{10}|(?:0\d{2,3}-?)?\d{7,8})$/.test(normalized);
 }
 
+export function normalizeNumericImportValue(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const normalized = text
+    .normalize("NFKC")
+    .replace(/,/g, "")
+    .replace(/[（(]\s*(?:公斤|千克|kg|KG|g|G|斤|件|箱|包|瓶|袋|个|pcs?)\s*[）)]/gi, "")
+    .replace(/\s*(?:公斤|千克|kg|KG|g|G|斤|件|箱|包|瓶|袋|个|pcs?)\s*$/gi, "")
+    .trim();
+
+  const match = normalized.match(/^\+?(\d+(?:\.\d+)?)/);
+  return match?.[1] ?? normalized;
+}
+
 function isPositiveNumber(value: string) {
-  const normalized = value.trim();
+  const normalized = normalizeNumericImportValue(value);
   if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
     return false;
   }

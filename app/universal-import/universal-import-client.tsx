@@ -276,6 +276,38 @@ type ToastItem = {
   tone: ToastTone;
 };
 
+function EmptyStateIllustration({ mode }: { mode: "preview" | "rules" }) {
+  return (
+    <div className={`empty-state-illustration ${mode}`} aria-hidden="true">
+      <div className="empty-state-board">
+        <span className="empty-state-chip">AI</span>
+        <div className="empty-state-lines">
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+      <div className="empty-state-docs">
+        <div className="empty-state-doc primary">
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="empty-state-doc secondary">
+          <span />
+          <span />
+        </div>
+      </div>
+      <div className="empty-state-grid-markers">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+    </div>
+  );
+}
+
 const DEFAULT_MAPPING = Object.fromEntries(
   UNIVERSAL_IMPORT_FIELDS.map((field) => [field.key, null]),
 ) as UniversalImportMapping;
@@ -2418,7 +2450,7 @@ export function UniversalImportClient({
                     </div>
 
                     {draftRows.length === 0 ? (
-                      <div className="empty-state-card">
+                      <div className="empty-state-card with-illustration">
                         <p className="section-kicker">空状态</p>
                         <h3>还没有生成结构化预览数据</h3>
                         <p>
@@ -2711,7 +2743,7 @@ export function UniversalImportClient({
                   </section>
                 </section>
 
-                <div className="toolbar submit-toolbar" style={{ marginTop: 16 }}>
+                <div className="toolbar submit-toolbar submit-toolbar-sticky" style={{ marginTop: 16 }}>
                   <button
                     type="button"
                     className="primary-button"
@@ -3026,7 +3058,7 @@ export function UniversalImportClient({
                       </label>
                     </div>
 
-                    <div className="toolbar" style={{ marginTop: 16 }}>
+                    <div className="toolbar rule-editor-toolbar rule-editor-toolbar-sticky" style={{ marginTop: 16 }}>
                       <button type="button" className="primary-button" onClick={() => void handleConfirmAiSuggestionSave()} disabled={!selectedFile || headers.length === 0}>
                         确认 AI 建议并保存为规则
                       </button>

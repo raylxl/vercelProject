@@ -6,6 +6,7 @@ import {
   createEmptyRow,
   formatIssueLabel,
   inferMappingFromHeaders,
+  normalizeNumericImportValue,
   UNIVERSAL_IMPORT_FIELDS,
   type UniversalImportField,
   type UniversalImportMapping,
@@ -329,9 +330,17 @@ function parseInlineKeyValueCell(value: unknown) {
 }
 
 function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): UniversalImportRow {
+  const normalizedValues = { ...values };
+  if (normalizedValues.weight) {
+    normalizedValues.weight = normalizeNumericImportValue(normalizedValues.weight);
+  }
+  if (normalizedValues.skuQuantity) {
+    normalizedValues.skuQuantity = normalizeNumericImportValue(normalizedValues.skuQuantity);
+  }
+
   return {
     ...createEmptyRow(rowIndex),
-    ...values,
+    ...normalizedValues,
     rowIndex,
   };
 }
