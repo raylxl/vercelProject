@@ -3141,7 +3141,7 @@ export function UniversalImportClient({
                           })}
                         </div>
                       ) : (
-                        <div className="empty-row rule-editor-empty with-illustration">可直接点击“新建规则”创建空白规则；如需配置字段映射，请上传样例文件生成 AI 建议，或应用一条带样例表头的已保存规则。</div>
+                        <div className="empty-row rule-editor-empty with-illustration">可直接点击“新建空白规则”创建规则；如需配置字段映射，请上传样例文件生成 AI 建议，或应用一条带样例表头的已保存规则。</div>
                       )}
                     </div>
 
