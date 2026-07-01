@@ -250,6 +250,10 @@ function normalizeKeyValueToken(value: unknown) {
 }
 
 function isLikelyKeyValueLabel(value: unknown) {
+  if (/^【[^】]+】\S{1,24}$/.test(normalizeCell(value))) {
+    return true;
+  }
+
   const normalized = normalizeKeyValueToken(value);
   if (!normalized) {
     return false;
@@ -264,8 +268,12 @@ function isLikelyKeyValueLabel(value: unknown) {
 function findAdjacentKeyValue(row: string[], index: number) {
   for (let currentIndex = index + 1; currentIndex < Math.min(row.length, index + 8); currentIndex += 1) {
     const value = normalizeCell(row[currentIndex]);
-    if (!value || isLikelyKeyValueLabel(value)) {
+    if (!value) {
       continue;
+    }
+
+    if (isLikelyKeyValueLabel(value)) {
+      return "";
     }
 
     return value;
@@ -697,6 +705,13 @@ function isContactPhoneLabelValue(value: unknown) {
 }
 
 function shouldAcceptFieldValue(field: UniversalImportField, value: string) {
+  if (
+    (field === "receiverStore" || field === "receiverName" || field === "receiverPhone" || field === "receiverAddress") &&
+    isLikelyKeyValueLabel(value)
+  ) {
+    return false;
+  }
+
   if (field === "receiverName" && (isPhoneLikeValue(value) || isContactPhoneLabelValue(value))) {
     return false;
   }

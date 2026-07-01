@@ -803,6 +803,33 @@ code {
   position: relative;
 }
 
+.field-helper {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.field-helper.error {
+  color: #b42318;
+}
+
+.inline-retry-button {
+  width: fit-content;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.inline-retry-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.66;
+}
+
 .multi-select summary {
   display: flex;
   align-items: center;

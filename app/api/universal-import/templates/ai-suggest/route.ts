@@ -564,8 +564,12 @@ function hasNearbyValue(row: string[], cellIndex: number) {
 
   for (let currentIndex = cellIndex + 1; currentIndex < Math.min(row.length, cellIndex + 8); currentIndex += 1) {
     const value = String(row[currentIndex] ?? "").trim();
-    if (!value || isLikelyKeyValueLabel(value)) {
+    if (!value) {
       continue;
+    }
+
+    if (isLikelyKeyValueLabel(value)) {
+      return false;
     }
 
     return true;
@@ -582,8 +586,12 @@ function findNearbyValue(row: string[], cellIndex: number) {
 
   for (let currentIndex = cellIndex + 1; currentIndex < Math.min(row.length, cellIndex + 8); currentIndex += 1) {
     const value = String(row[currentIndex] ?? "").trim();
-    if (!value || isLikelyKeyValueLabel(value)) {
+    if (!value) {
       continue;
+    }
+
+    if (isLikelyKeyValueLabel(value)) {
+      return "";
     }
 
     return value;
@@ -593,6 +601,10 @@ function findNearbyValue(row: string[], cellIndex: number) {
 }
 
 function isLikelyKeyValueLabel(value: unknown) {
+  if (/^【[^】]+】\S{1,24}$/.test(String(value ?? "").trim())) {
+    return true;
+  }
+
   const normalized = normalizeHeaderText(normalizeKeyValueLabel(value)).replace(/[*＊]/g, "");
   if (!normalized) {
     return false;

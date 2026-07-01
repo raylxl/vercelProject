@@ -1175,6 +1175,7 @@ export function UniversalImportClient({
   const [ruleList, setRuleList] = useState<RuleRecord[]>([]);
   const [ruleLoading, setRuleLoading] = useState(false);
   const [ruleDeleting, setRuleDeleting] = useState(false);
+  const [ruleLoadError, setRuleLoadError] = useState("");
   const [ruleStatus, setRuleStatus] = useState("");
   const [ruleNameInput, setRuleNameInput] = useState("");
   const [selectedRuleId, setSelectedRuleId] = useState("");
@@ -1576,7 +1577,7 @@ export function UniversalImportClient({
 
   async function loadRules() {
     setRuleLoading(true);
-    setRuleStatus("");
+    setRuleLoadError("");
     try {
       const response = await fetch("/api/universal-import/templates");
       const data = (await response.json()) as RuleListResponse;
@@ -1589,7 +1590,7 @@ export function UniversalImportClient({
         return current.filter((id) => nextRuleIds.has(id));
       });
     } catch (error) {
-      setRuleStatus(error instanceof Error ? error.message : "加载规则列表失败，请稍后重试。");
+      setRuleLoadError(error instanceof Error ? error.message : "加载规则列表失败，请稍后重试。");
     } finally {
       setRuleLoading(false);
     }
@@ -2591,6 +2592,13 @@ export function UniversalImportClient({
     : hasBlockingErrors
       ? `存在 ${rowErrorSummary.length} 个未修正问题，请先修正后再提交。`
       : "";
+  const importRuleHelperText = ruleLoading
+    ? "正在加载已保存规则..."
+    : ruleLoadError
+      ? ruleLoadError
+      : ruleList.length === 0
+        ? "暂无已保存规则，请先到规则管理中新建规则。"
+        : `已加载 ${ruleList.length} 条规则`;
   const currentMenuTitle =
     activeTab === "rules" ? "规则管理" : activeTab === "history" ? "历史运单" : "运单管理";
 
@@ -2694,14 +2702,26 @@ export function UniversalImportClient({
                       </label>
                       <label className="search-field">
                         <span>选择解析规则</span>
-                        <select value={selectedRuleId} onChange={(event) => handleRuleSelect(event.target.value)}>
-                          <option value="">请选择已保存规则</option>
+                        <select
+                          value={selectedRuleId}
+                          onChange={(event) => handleRuleSelect(event.target.value)}
+                          disabled={ruleLoading}
+                        >
+                          <option value="">
+                            {ruleLoading ? "正在加载规则..." : "请选择已保存规则"}
+                          </option>
                           {ruleList.map((rule) => (
                             <option value={rule.id} key={rule.id}>
                               {rule.ruleName} / {rule.fileType} / v{rule.version}
                             </option>
                           ))}
                         </select>
+                        <span className={`field-helper${ruleLoadError ? " error" : ""}`}>{importRuleHelperText}</span>
+                        {ruleLoadError ? (
+                          <button type="button" className="inline-retry-button" onClick={() => void loadRules()} disabled={ruleLoading}>
+                            重试加载
+                          </button>
+                        ) : null}
                       </label>
                       <label className="search-field">
                         <span>规则名称</span>
