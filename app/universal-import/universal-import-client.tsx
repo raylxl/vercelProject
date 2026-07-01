@@ -2,6 +2,7 @@
 
 import * as XLSX from "xlsx";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   countAggregatedShipments,
@@ -321,6 +322,13 @@ const UNIVERSAL_SIDEBAR_MENUS: SidebarMenuItem[] = [
     ],
   },
 ];
+
+function resolveTabParam(tab?: string | null): "import" | "history" | "rules" {
+  if (tab === "history" || tab === "rules") {
+    return tab;
+  }
+  return "import";
+}
 
 function createRowId() {
   return globalThis.crypto.randomUUID();
@@ -1092,12 +1100,19 @@ export function UniversalImportClient({
   operatorName: string;
   initialTab?: "import" | "history" | "rules";
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cellRefs = useRef(new Map<string, HTMLInputElement>());
   const toastTimerRef = useRef<number | null>(null);
   const autoPreviewTimerRef = useRef<number | null>(null);
   const lastAutoPreviewSignatureRef = useRef("");
   const autoPreviewBusyRef = useRef(false);
+  const historyAbortRef = useRef<AbortController | null>(null);
+  const historyRequestIdRef = useRef(0);
+  const historyLoadedOnceRef = useRef(false);
+  const historyCodesLoadedRef = useRef(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileType, setFileType] = useState<SupportedImportFileType>("excel");
   const [fileName, setFileName] = useState("");
@@ -1428,6 +1443,12 @@ export function UniversalImportClient({
   }
 
   async function loadHistory(nextFilters: HistoryFilters) {
+    const requestId = historyRequestIdRef.current + 1;
+    historyRequestIdRef.current = requestId;
+    historyAbortRef.current?.abort();
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort("history-timeout"), 12000);
     const normalizedFilters = {
       ...nextFilters,
       page: Math.max(nextFilters.page, 1),
@@ -1443,10 +1464,16 @@ export function UniversalImportClient({
       if (normalizedFilters.submittedAt.trim()) params.set("submittedAt", normalizedFilters.submittedAt.trim());
       params.set("page", String(normalizedFilters.page));
       params.set("pageSize", String(normalizedFilters.pageSize));
-      const response = await fetch(`/api/universal-import/shipments?${params.toString()}`);
+      const response = await fetch(`/api/universal-import/shipments?${params.toString()}`, {
+        signal: controller.signal,
+        cache: "no-store",
+      });
       const data = (await response.json()) as ShipmentHistoryResponse;
       if (!response.ok || !data.records || typeof data.total !== "number") {
         throw new Error(data.error ?? "查询历史运单失败，请稍后重试。");
+      }
+      if (requestId !== historyRequestIdRef.current) {
+        return;
       }
       setHistoryData(data);
       setHistoryFilters({
@@ -1457,14 +1484,32 @@ export function UniversalImportClient({
       setSelectedHistoryId((current) =>
         data.records?.some((record) => record.id === current) ? current : data.records?.[0]?.id ?? "",
       );
+      historyLoadedOnceRef.current = true;
     } catch (error) {
-      setHistoryStatus(error instanceof Error ? error.message : "查询历史运单失败，请稍后重试。");
+      if (controller.signal.aborted) {
+        if (requestId === historyRequestIdRef.current) {
+          setHistoryStatus("历史数据加载超时，请重试。");
+        }
+        return;
+      }
+      if (requestId === historyRequestIdRef.current) {
+        setHistoryStatus(error instanceof Error ? error.message : "查询历史运单失败，请稍后重试。");
+      }
     } finally {
-      setHistoryLoading(false);
+      window.clearTimeout(timeoutId);
+      if (historyAbortRef.current === controller) {
+        historyAbortRef.current = null;
+      }
+      if (requestId === historyRequestIdRef.current) {
+        setHistoryLoading(false);
+      }
     }
   }
 
   async function loadHistoryCodes() {
+    if (historyCodesLoadedRef.current) {
+      return;
+    }
     try {
       const collected: ExistingExternalCodeEntry[] = [];
       let page = 1;
@@ -1488,6 +1533,7 @@ export function UniversalImportClient({
         page += 1;
       } while (page <= totalPages);
       setExistingCodeRows(collected);
+      historyCodesLoadedRef.current = true;
     } catch {
       // ignore warmup errors
     }
@@ -2244,10 +2290,13 @@ export function UniversalImportClient({
   }
 
   useEffect(() => {
-    void loadHistory(DEFAULT_HISTORY_FILTERS);
-    void loadHistoryCodes();
     void loadRules();
   }, []);
+
+  useEffect(() => {
+    const nextTab = resolveTabParam(searchParams?.get("tab"));
+    setActiveTab((current) => (current === nextTab ? current : nextTab));
+  }, [searchParams]);
 
   useEffect(() => {
     if (activeTab === "history") {
@@ -2262,6 +2311,29 @@ export function UniversalImportClient({
 
     setActiveMenuPath("智能多格式批量下单系统/万能导入V2");
   }, [activeTab]);
+
+  useEffect(() => {
+    const currentTabParam = resolveTabParam(searchParams?.get("tab"));
+    if (currentTabParam === activeTab) {
+      return;
+    }
+    const nextUrl = activeTab === "import" ? pathname : `${pathname}?tab=${activeTab}`;
+    router.replace(nextUrl, { scroll: false });
+  }, [activeTab, pathname, router, searchParams]);
+
+  useEffect(() => {
+    if (activeTab !== "history" || historyLoading || historyLoadedOnceRef.current) {
+      return;
+    }
+    void loadHistory(historyFilters);
+  }, [activeTab, historyFilters, historyLoading]);
+
+  useEffect(() => {
+    if (!selectedFile || historyCodesLoadedRef.current) {
+      return;
+    }
+    void loadHistoryCodes();
+  }, [selectedFile]);
 
   useEffect(() => {
     setRuleDsl((current) => ({
@@ -2327,6 +2399,7 @@ export function UniversalImportClient({
 
   useEffect(() => {
     return () => {
+      historyAbortRef.current?.abort();
       if (toastTimerRef.current) {
         window.clearTimeout(toastTimerRef.current);
       }
