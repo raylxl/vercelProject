@@ -2,7 +2,7 @@ export const UNIVERSAL_IMPORT_FIELDS = [
   {
     key: "externalCode",
     label: "外部编码",
-    required: false,
+    required: true,
     aliases: ["外部编码", "订单号", "配送单号", "配送汇总单号", "单据编号", "单号", "externalcode", "code"],
   },
   {
@@ -231,13 +231,7 @@ function normalizeExternalCode(value: string) {
 }
 
 export function countAggregatedShipments(rows: UniversalImportRow[]) {
-  return rows.reduce((count, row) => {
-    if (row.externalCode.trim()) {
-      return count;
-    }
-
-    return count + 1;
-  }, new Set(rows.map((row) => normalizeExternalCode(row.externalCode)).filter(Boolean)).size);
+  return new Set(rows.map((row) => normalizeExternalCode(row.externalCode)).filter(Boolean)).size;
 }
 
 function getDuplicateSourceLabel(entry: ExistingExternalCodeEntry) {
@@ -284,7 +278,13 @@ export function validateImportRows(
     const rowNumber = index + 1;
     const externalCode = row.externalCode.trim();
 
-    if (externalCode) {
+    if (!externalCode) {
+      issues.push({
+        rowIndex: rowNumber,
+        field: "externalCode",
+        message: "必填项缺失",
+      });
+    } else {
       const normalized = normalizeExternalCode(externalCode);
       const existing = existingLookup.get(normalized);
 

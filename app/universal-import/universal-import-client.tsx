@@ -427,7 +427,7 @@ function buildAggregatedPreviewShipments(rows: DraftRow[]): AggregatedPreviewShi
       grouped.get(key) ??
       {
         key,
-        externalCode: externalCode || `AUTO-${row.rowIndex || index + 1}`,
+        externalCode: externalCode || "未填写外部编码",
         receiverLabel: receiverLine,
         receiverGroupCount: receiverLine === "-" ? 0 : 1,
         receiverLines: receiverLine === "-" ? [] : [receiverLine],

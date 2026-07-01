@@ -17,6 +17,7 @@ import {
 
 const DEFAULT_DEMO_DIR = "D:\\codex\\AITest\\demos";
 const FALLBACK_ASSET_DIR = path.join(process.cwd(), "docs", "exam-assets");
+const ALLOW_FALLBACK_ASSETS = process.env.ALLOW_EXAM_ASSET_FALLBACK === "1";
 
 function detectFileType(fileName: string): SupportedImportFileType {
   const ext = path.extname(fileName).toLowerCase();
@@ -214,6 +215,12 @@ function detectCardRule(document: ParsedDocument) {
       receiverPhone: "(?:电话|手机)[:：\\s]+(1\\d{10}|(?:0\\d{2,3}-?)?\\d{7,8})",
       receiverAddress: "地址[:：\\s]+([^|\\n\\r]+)",
     },
+    keyValueLabels: {
+      receiverStore: ["调入门店", "收货门店", "门店"],
+      receiverName: ["收货人", "联系人"],
+      receiverPhone: ["电话", "联系电话", "手机"],
+      receiverAddress: ["收货地址", "地址"],
+    },
     itemColumns,
     excludeRowRegex: "合计|小计|备注",
   };
@@ -366,6 +373,7 @@ function buildHeuristicRule(document: ParsedDocument, fileType: SupportedImportF
       fieldColumns: mapping,
       requiredRowFields: ["skuCode", "skuName", "skuQuantity"],
       skipRowRegex: "合计|总计|小计",
+      externalCodeTemplate: typeof mapping.externalCode === "number" ? "" : "SHEET-{sectionTitle}",
     },
   });
 
@@ -388,7 +396,10 @@ function buildHeuristicRule(document: ParsedDocument, fileType: SupportedImportF
   if (cardRule) {
     rule = updateTransform(rule, "card_split", {
       enabled: true,
-      config: cardRule,
+      config: {
+        ...cardRule,
+        externalCodeTemplate: "CARD-{cardIndex}",
+      },
     });
     rule = updateTransform(rule, "matrix_pivot", {
       enabled: false,
@@ -456,15 +467,35 @@ function buildHeuristicRule(document: ParsedDocument, fileType: SupportedImportF
 
 async function listInputFiles() {
   const requestedDir = process.argv[2]?.trim() || DEFAULT_DEMO_DIR;
-  const demoDir = await fs
-    .access(requestedDir)
-    .then(() => requestedDir)
-    .catch(() => FALLBACK_ASSET_DIR);
+  let demoDir = requestedDir;
+
+  try {
+    await fs.access(demoDir);
+  } catch {
+    if (!ALLOW_FALLBACK_ASSETS) {
+      throw new Error(
+        `Demo directory not found: ${requestedDir}. Provide the real exam demos directory or set ALLOW_EXAM_ASSET_FALLBACK=1 to run against docs/exam-assets.`,
+      );
+    }
+
+    demoDir = FALLBACK_ASSET_DIR;
+  }
+
   const names = await fs.readdir(demoDir);
-  return names
+  const files = names
     .filter((name) => /\.(xlsx|xls|docx|doc|pdf)$/i.test(name))
     .sort((left, right) => left.localeCompare(right, "zh-CN"))
     .map((name) => path.join(demoDir, name));
+
+  if (files.length === 0) {
+    throw new Error(`No supported demo files found in ${demoDir}.`);
+  }
+
+  return {
+    demoDir,
+    usedFallbackAssets: demoDir === FALLBACK_ASSET_DIR,
+    files,
+  };
 }
 
 async function verifyFile(filePath: string) {
@@ -492,6 +523,7 @@ async function verifyFile(filePath: string) {
     rawRowCount: document.rawRows.length,
     rowCount: result.rowCount,
     issueCount: result.issueCount,
+    issues: result.issues.slice(0, 10),
     summary: result.summary,
     enabledTransforms: rule.transforms.filter((transform) => transform.enabled).map((transform) => transform.type),
     elapsedMs: Math.round(performance.now() - startedAt),
@@ -499,18 +531,20 @@ async function verifyFile(filePath: string) {
 }
 
 async function main() {
-  const files = await listInputFiles();
+  const { demoDir, usedFallbackAssets, files } = await listInputFiles();
   const results = [];
 
   for (const file of files) {
     results.push(await verifyFile(file));
   }
 
-  const failed = results.filter((result) => result.rowCount === 0);
+  const failed = results.filter((result) => result.rowCount === 0 || result.issueCount > 0);
   console.log(
     JSON.stringify(
       {
         checkedAt: new Date().toISOString(),
+        demoDir,
+        usedFallbackAssets,
         fileCount: results.length,
         passCount: results.length - failed.length,
         failedFiles: failed.map((item) => item.fileName),

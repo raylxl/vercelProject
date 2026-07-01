@@ -103,8 +103,10 @@ type CardSplitConfig = {
   startRegex?: string;
   itemHeaderRegex?: string;
   fieldRegex?: FieldRegexConfig;
+  keyValueLabels?: Partial<Record<UniversalImportField, string[]>>;
   itemColumns?: Partial<Record<UniversalImportField, number>>;
   excludeRowRegex?: string;
+  externalCodeTemplate?: string;
 };
 
 type TextRecordSplitConfig = {
@@ -681,7 +683,10 @@ function extractAdjacentKeyValueFields(
     }
 
     for (const row of section.rows) {
-      const labelIndex = row.findIndex((cell) => normalizeCell(cell).replace(/[:：]$/, "") === label);
+      const labelIndex = row.findIndex((cell) => {
+        const normalizedCell = normalizeCell(cell).replace(/[:：]$/, "");
+        return normalizedCell === label || regexMatchesText(normalized[field], normalizedCell);
+      });
       if (labelIndex < 0) {
         continue;
       }
@@ -692,6 +697,48 @@ function extractAdjacentKeyValueFields(
         return;
       }
     }
+  });
+
+  return current;
+}
+
+function extractFieldsByKeyValueLabels(
+  rows: string[][],
+  keyValueLabels: unknown,
+  current: Partial<Record<UniversalImportField, string>>,
+) {
+  if (!isRecord(keyValueLabels)) {
+    return current;
+  }
+
+  (Object.keys(keyValueLabels) as UniversalImportField[]).forEach((field) => {
+    if (!isImportField(field) || !isWeakExtractedValue(current[field])) {
+      return;
+    }
+
+    const labels = asStringArray(keyValueLabels[field]);
+    if (labels.length === 0) {
+      return;
+    }
+
+    for (const row of rows) {
+      const labelIndex = row.findIndex((cell) => {
+        const normalizedCell = normalizeCell(cell).replace(/[:：]$/, "");
+        return labels.some((label) => normalizedCell === label.replace(/[:：]$/, ""));
+      });
+
+      if (labelIndex < 0) {
+        continue;
+      }
+
+      const value = row.slice(labelIndex + 1).map((cell) => normalizeCell(cell)).find(Boolean);
+      if (value) {
+        current[field] = cleanExtractedField(field, value);
+        return current;
+      }
+    }
+
+    return;
   });
 
   return current;
@@ -924,6 +971,11 @@ function parseRowsByMapping(
     }
 
     const values: Partial<Record<UniversalImportField, string>> = { ...baseValues };
+    const rowContext = toInterpolationValues({
+      sectionTitle: section.title,
+      rowIndex: rowOffset + output.length + 1,
+      sourceRowIndex: dataStartRowIndex + relativeIndex + 1,
+    });
     (Object.keys(columns) as UniversalImportField[]).forEach((field) => {
       const value = getColumnValue(sourceRow, columns[field]);
       if (value) {
@@ -971,6 +1023,10 @@ function parseRowsByMapping(
 
     if (isRepeatedTableHeaderRow(values)) {
       return;
+    }
+
+    if (!normalizeCell(values.externalCode)) {
+      values.externalCode = interpolate(asString(config?.externalCodeTemplate), rowContext);
     }
 
     const hasRequiredValues = requiredFields.length
@@ -1240,11 +1296,16 @@ function parseCards(section: ParsedDocument["sections"][number], config: CardSpl
 
   cards.forEach((card, cardIndex) => {
     const text = card.map((row) => rowToSearchText(row)).join("\n");
+    const cardContext = toInterpolationValues({
+      sectionTitle: section.title,
+      cardIndex: cardIndex + 1,
+    });
     const baseValues: Partial<Record<UniversalImportField, string>> = {
-      externalCode: ensureUniqueExternalCode("CARD", cardIndex),
+      externalCode: interpolate(config.externalCodeTemplate, cardContext) || ensureUniqueExternalCode("CARD", cardIndex),
     };
 
     Object.assign(baseValues, extractFieldsByRegex(text, config.fieldRegex));
+    extractFieldsByKeyValueLabels(card, config.keyValueLabels, baseValues);
     extractAdjacentKeyValueFields(
       {
         title: `card-${cardIndex + 1}`,

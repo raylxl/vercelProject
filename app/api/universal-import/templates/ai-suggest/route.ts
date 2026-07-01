@@ -296,6 +296,7 @@ function applyHeaderRecommendation(rule: UniversalImportRuleDsl, headerRowIndex:
               headerRowIndex,
               dataStartRowIndex: nextDataStartRowIndex(transform.config?.dataStartRowIndex),
               fieldColumns: mapping,
+              externalCodeTemplate: typeof mapping.externalCode === "number" ? "" : "SHEET-{sectionTitle}",
             },
           }
         : transform,
@@ -454,6 +455,12 @@ function detectCardSplitRecommendation(document: Awaited<ReturnType<typeof parse
       receiverPhone: "(?:电话|手机|联系电话)[:：\\s]*(1\\d{10}|(?:0\\d{2,3}-?)?\\d{7,8})",
       receiverAddress: "(?:收货地址|地址)[:：\\s]*([^|\\n\\r]+)",
     },
+    keyValueLabels: {
+      receiverStore: ["调入门店", "收货门店", "门店"],
+      receiverName: ["收货人", "联系人"],
+      receiverPhone: ["电话", "联系电话", "手机"],
+      receiverAddress: ["收货地址", "地址"],
+    },
     itemColumns: inferMappingFromHeaders(itemHeader),
     excludeRowRegex: "合计|小计|备注",
   };
@@ -471,7 +478,10 @@ function applyLocalComplexRecommendations(
   if (cardConfig) {
     nextRule = updateTransform(nextRule, "card_split", {
       enabled: true,
-      config: cardConfig,
+      config: {
+        ...cardConfig,
+        externalCodeTemplate: "CARD-{cardIndex}",
+      },
     });
     nextRule = updateTransform(nextRule, "matrix_pivot", {
       enabled: false,

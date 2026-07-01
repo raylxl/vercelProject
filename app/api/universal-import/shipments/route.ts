@@ -415,7 +415,7 @@ export async function POST(request: Request) {
     const shipmentMap = new Map<string, ShipmentDraft>();
 
     rows.forEach((row) => {
-      const externalCode = row.externalCode.trim() || `AUTO-${row.rowIndex}`;
+      const externalCode = row.externalCode.trim();
       const current = shipmentMap.get(externalCode);
 
       if (current) {
