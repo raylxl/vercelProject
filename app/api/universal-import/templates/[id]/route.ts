@@ -28,6 +28,10 @@ function createCopiedFingerprint(sourceFingerprint: string) {
   return `${sourceFingerprint}::copy::${crypto.randomUUID()}`;
 }
 
+function createUpdatedFingerprint(ruleId: string, sheetName: string, headers: unknown[]) {
+  return `${buildTemplateFingerprint(sheetName, headers)}::rule::${ruleId}`;
+}
+
 type RouteContext = {
   params: Promise<{ id: string }>;
 };
@@ -81,7 +85,6 @@ export async function PUT(request: Request, context: RouteContext) {
     };
 
     const headers = body.headers ?? [];
-    const fingerprint = buildTemplateFingerprint(body.sheetName ?? "Sheet1", headers);
     const operatorName = await getOperatorNameFromSession();
     const inferredMapping = inferMappingFromHeaders(headers);
     const fileType = (body.fileType?.trim() || "excel") as SupportedImportFileType;
@@ -100,7 +103,7 @@ export async function PUT(request: Request, context: RouteContext) {
     const template = await prisma.universalImportRule.update({
       where: { id },
       data: {
-        fingerprint,
+        fingerprint: createUpdatedFingerprint(id, body.sheetName ?? "Sheet1", headers),
         ruleName: body.ruleName?.trim() || body.sheetName?.trim() || "导入规则",
         fileType,
         status: body.status?.trim() || "ACTIVE",

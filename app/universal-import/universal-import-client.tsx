@@ -1338,7 +1338,7 @@ export function UniversalImportClient({
       }));
       setRuleStatus(`${transformType} 配置已更新，请确认后保存规则。`);
     } catch (error) {
-      setRuleStatus(error instanceof Error ? error.message : "Transform config JSON 格式不正确，请修正后再保存。");
+      setRuleStatus(error instanceof Error ? error.message : "规则配置 JSON 格式不正确，请修正后再保存。");
     }
   }
 
@@ -1541,6 +1541,9 @@ export function UniversalImportClient({
       return;
     }
 
+    const selectedRule = selectedRuleId ? ruleList.find((item) => item.id === selectedRuleId) : null;
+    const incompatibleRuleSelected = Boolean(selectedRule && selectedRule.fileType !== detectedFileType);
+
     setSelectedFile(file);
     setFileName(file.name);
     setFileType(detectedFileType);
@@ -1560,6 +1563,15 @@ export function UniversalImportClient({
     setAiProviderLabel("");
     setAiModelLabel("");
     setParseFailure(null);
+    setPerformanceSnapshot(null);
+    setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
+    lastAutoPreviewSignatureRef.current = "";
+    setParseFailure(null);
+    setPerformanceSnapshot(null);
+    setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
+    lastAutoPreviewSignatureRef.current = "";
+    setParseFailure(null);
+    lastAutoPreviewSignatureRef.current = "";
     setParseProgress({
       active: true,
       value: 8,
@@ -1572,6 +1584,16 @@ export function UniversalImportClient({
         ? "文件已上传，请点击“试解析选中规则”。"
         : "文件已上传，请先在“选择解析规则”中手动选择一条规则。",
     );
+    if (incompatibleRuleSelected) {
+      setSelectedRuleId("");
+      setRuleNameInput("");
+      setMapping(DEFAULT_MAPPING);
+      setRuleDsl(buildDefaultRuleDsl(DEFAULT_MAPPING, detectedFileType));
+      setTransformConfigDrafts({});
+      setTemplateInfo("已清空与当前文件类型不匹配的规则，请重新手动选择。");
+      setStatus("文件已上传，但原先选中的规则与当前文件类型不匹配，系统已为你清空规则选择。");
+      pushToast("已清空不兼容的规则，请重新选择对应文件类型的解析规则。", "info");
+    }
     window.setTimeout(() => {
       setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
     }, 900);
@@ -1605,6 +1627,8 @@ export function UniversalImportClient({
 
   function handleFileTypeChange(nextFileType: SupportedImportFileType) {
     setFileType(nextFileType);
+    setSelectedFile(null);
+    setFileName("");
     setSelectedRuleId("");
     setRuleNameInput("");
     setDraftRows([]);
@@ -1615,6 +1639,8 @@ export function UniversalImportClient({
     setTailSourceOptions({});
     setFingerprint("");
     setRuleTestSummary("");
+    setMapping(DEFAULT_MAPPING);
+    setRuleDsl(buildDefaultRuleDsl(DEFAULT_MAPPING, nextFileType));
     setTransformConfigDrafts({});
     setAiSummary("");
     setAiRiskNotes([]);
@@ -1848,7 +1874,7 @@ export function UniversalImportClient({
       setRuleStatus(
         headers.length > 0
           ? `规则“${template.ruleName}”已保存。`
-          : `空白规则“${template.ruleName}”已创建，可后续上传样例文件、生成 AI 建议或编辑 Transform Config。`,
+          : `空白规则“${template.ruleName}”已创建，可后续上传样例文件、生成 AI 建议或编辑规则配置。`,
       );
     } catch (error) {
       setRuleStatus(error instanceof Error ? error.message : "保存规则失败，请稍后重试。");
@@ -1909,7 +1935,7 @@ export function UniversalImportClient({
 
   function handleEditRule(rule: RuleRecord) {
     handleApplyRule(rule);
-    setRuleStatus(`已进入规则“${rule.ruleName}”编辑状态，可直接修改字段映射和 Transform Config 后保存。`);
+    setRuleStatus(`已进入规则“${rule.ruleName}”编辑状态，可直接修改字段映射和规则配置后保存。`);
     setTemplateInfo(`当前正在编辑规则：${rule.ruleName}`);
   }
 
@@ -1924,6 +1950,9 @@ export function UniversalImportClient({
       }
       if (selectedRuleId === ruleId) {
         setSelectedRuleId("");
+        setRuleNameInput("");
+        setTemplateInfo("请先手动选择解析规则，不做自动匹配。");
+        setStatus("当前选中的规则已删除，请重新选择或新建规则。");
       }
       setRuleStatus("规则已删除。");
       await loadRules();
@@ -1948,9 +1977,9 @@ export function UniversalImportClient({
         throw new Error(data.error ?? "复制规则失败，请稍后重试。");
       }
 
-      setSelectedRuleId(data.template.id);
-      setRuleNameInput(data.template.ruleName);
+      handleApplyRule(data.template);
       setRuleStatus(`规则“${data.template.ruleName}”已复制，可继续调整后保存。`);
+      setStatus(`已复制规则 ${data.template.ruleName}，当前编辑区已同步到新副本规则。`);
       await loadRules();
     } catch (error) {
       setRuleStatus(error instanceof Error ? error.message : "复制规则失败，请稍后重试。");
@@ -1964,7 +1993,7 @@ export function UniversalImportClient({
     }
     if (activeTab === "import" && !selectedRuleId) {
       setStatus("请先手动选择解析规则，再执行试解析。");
-      setRuleTestSummary("考试要求：上传文件时由用户手动选择规则，系统不做自动匹配。");
+      setRuleTestSummary("当前版本要求上传文件后由用户手动选择规则，系统不做自动匹配。");
       return;
     }
     await handleFileParse(selectedFile, fileType, mapping, ruleDsl);
@@ -1982,7 +2011,7 @@ export function UniversalImportClient({
       setStatus("正在使用当前 AI 建议和人工调整后的映射试解析。");
       await handleFileParse(selectedFile, fileType, mapping, editorRuleDsl);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和 Transform Config。");
+      setStatus(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和规则配置。");
     }
   }
 
@@ -2280,7 +2309,7 @@ export function UniversalImportClient({
           await handleFileParse(selectedFile, fileType, mapping, editorRuleDsl);
           lastAutoPreviewSignatureRef.current = signature;
         } catch (error) {
-          setRuleStatus(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和 Transform Config。");
+          setRuleStatus(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和规则配置。");
         } finally {
           autoPreviewBusyRef.current = false;
         }
@@ -2306,6 +2335,12 @@ export function UniversalImportClient({
       }
     };
   }, []);
+
+  const submitBlockedHint = !selectedRuleId
+    ? "请先手动选择解析规则后再提交。"
+    : hasBlockingErrors
+      ? `存在 ${rowErrorSummary.length} 个未修正问题，请先修正后再提交。`
+      : "";
 
   return (
     <main className="dashboard-shell">
@@ -2376,7 +2411,7 @@ export function UniversalImportClient({
                     <div>
                       <p className="workspace-breadcrumb">智能多格式批量下单系统 / 万能导入V2</p>
                       <h1>智能多格式批量下单系统</h1>
-                      <p>当前版本已支持 Excel / Word / PDF 样例试解析、AI 规则建议、规则 DSL 基础结构、在线编辑、历史入库与规则管理。</p>
+                      <p>当前版本已支持 Excel / Word / PDF 样例试解析、AI 规则建议、规则在线编辑、历史入库与规则管理。</p>
                     </div>
                     <div className="import-stat-grid">
                       <article className="overview-card accent">
@@ -2952,7 +2987,7 @@ export function UniversalImportClient({
                   <section className="workspace-card">
                     <div className="card-heading">
                       <div>
-                        <p className="section-kicker">规则 DSL</p>
+                        <p className="section-kicker">规则概览</p>
                         <h3>当前规则结构摘要</h3>
                       </div>
                     </div>
@@ -2986,13 +3021,13 @@ export function UniversalImportClient({
                     type="button"
                     className="primary-button"
                     onClick={() => void submitImport()}
-                    disabled={submitting || draftRows.length === 0 || hasBlockingErrors}
-                    title={hasBlockingErrors ? "存在未修正错误，请先处理后再提交。" : "提交下单"}
+                    disabled={submitting || draftRows.length === 0 || hasBlockingErrors || !selectedRuleId}
+                    title={submitBlockedHint || "提交下单"}
                   >
                     {submitting ? "提交中..." : "提交下单"}
                   </button>
-                  {hasBlockingErrors ? (
-                    <span className="submit-blocked-hint">存在 {rowErrorSummary.length} 个未修正问题，请先修正后再提交。</span>
+                  {submitBlockedHint ? (
+                    <span className="submit-blocked-hint">{submitBlockedHint}</span>
                   ) : null}
                 </div>
 
@@ -3104,10 +3139,10 @@ export function UniversalImportClient({
                   <article className="overview-card">
                     <p>最近导入</p>
                     <strong>{historyData.records?.[0] ? formatDateTime(historyData.records[0].batch.createdAt) : "-"}</strong>
-                    <span>便于答辩时展示导入结果可追溯</span>
+                    <span>用于快速查看最近一次导入记录</span>
                   </article>
                   <article className="overview-card">
-                    <p>当前讲解对象</p>
+                    <p>当前查看</p>
                     <strong>{selectedHistoryRecord?.externalCode ?? "-"}</strong>
                     <span>下方可查看运单明细、来源文件和收货信息</span>
                   </article>
@@ -3121,7 +3156,7 @@ export function UniversalImportClient({
                     </div>
                     <div className="history-filter-tips">
                       <span className="history-filter-tip">支持分页查看</span>
-                      <span className="history-filter-tip">支持答辩演示检索过程</span>
+                      <span className="history-filter-tip">便于演示检索过程</span>
                     </div>
                   </div>
                   <div className="history-filters history-filters-panel">
@@ -3207,13 +3242,13 @@ export function UniversalImportClient({
                         return (
                           <>
                       <p className="history-detail-caption">
-                        当前展示该运单的收货信息、来源文件和 SKU 明细，可用于演示导入结果可追溯。
+                        当前展示该运单的收货信息、来源文件和 SKU 明细，方便核对导入结果与来源依据。
                       </p>
                       <div className="overview-grid history-detail-grid">
                         <article className="overview-card">
                           <p>运单号</p>
                           <strong>{selectedHistoryRecord.externalCode}</strong>
-                          <span>用于展示系统对单据主键的归并能力</span>
+                          <span>用于标识该条运单的外部单据编号</span>
                         </article>
                         <article className="overview-card">
                           <p>收货信息</p>
@@ -3360,7 +3395,7 @@ export function UniversalImportClient({
                       <div className="card-heading compact">
                         <div>
                           <p className="section-kicker">字段映射</p>
-                          <h3>人工确认 AI 映射列</h3>
+                          <h3>人工确认字段映射</h3>
                         </div>
                         <span className="history-pill">表头第 {activeHeaderRowIndex + 1} 行</span>
                       </div>
@@ -3415,8 +3450,8 @@ export function UniversalImportClient({
                     <div className="rule-editor-section">
                       <div className="card-heading compact">
                         <div>
-                          <p className="section-kicker">Transform Config</p>
-                          <h3>规则 DSL JSON / 表单编辑</h3>
+                          <p className="section-kicker">规则配置</p>
+                          <h3>规则动作与 JSON 配置</h3>
                         </div>
                       </div>
                       <div className="transform-editor-stack">
@@ -3468,7 +3503,7 @@ export function UniversalImportClient({
                             <span>参与试解析</span>
                           </label>
                           <label className="search-field">
-                            <span>config JSON</span>
+                            <span>配置 JSON</span>
                             <textarea
                               className="json-editor"
                               value={transformConfigDrafts[transform.type] ?? formatTransformConfig(transform.config)}
@@ -3515,7 +3550,7 @@ export function UniversalImportClient({
                             <tr><td colSpan={6} className="empty-row">暂无已保存规则，可点击上方“新建空白规则”开始配置。</td></tr>
                           ) : (
                             ruleList.map((rule) => (
-                              <tr key={rule.id} className={selectedRuleId === rule.id ? "has-error" : ""}>
+                              <tr key={rule.id} className={selectedRuleId === rule.id ? "rule-row-active" : ""}>
                                 <td>{rule.ruleName}</td>
                                 <td>{rule.fileType}</td>
                                 <td>v{rule.version}</td>

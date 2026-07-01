@@ -448,12 +448,18 @@ code {
 }
 
 .tabbar-back {
-  width: 28px;
-  height: 28px;
+  min-width: 58px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
   border-radius: 6px;
   background: #f3f8fb;
   color: var(--muted);
   cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 700;
 }
 
 .workspace-tab {
@@ -2238,6 +2244,14 @@ code {
   font-weight: 700;
 }
 
+.rule-row-active {
+  background: rgba(4, 116, 146, 0.08);
+}
+
+.rule-row-active td {
+  font-weight: 700;
+}
+
 .history-detail-card {
   margin-top: 18px;
 }
@@ -2265,6 +2279,30 @@ code {
   border-radius: 12px;
   background: #f8fbfd;
   box-shadow: var(--shadow-sm);
+}
+
+.history-table tbody tr,
+.history-detail-table tbody tr {
+  cursor: pointer;
+}
+
+.history-table tbody tr:hover,
+.history-detail-table tbody tr:hover,
+.rule-row-active:hover,
+.history-row-active:hover {
+  background: rgba(4, 116, 146, 0.1);
+}
+
+.history-filter-panel .search-field > span,
+.rule-editor-section .search-field > span {
+  font-weight: 700;
+}
+
+.history-filter-panel .search-field input,
+.history-filter-panel .search-field select,
+.rule-editor-section .search-field input,
+.rule-editor-section .search-field textarea {
+  background: #fff;
 }
 
 @media (max-width: 1480px) {
