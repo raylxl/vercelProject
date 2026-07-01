@@ -15,7 +15,7 @@ import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
 import { NextResponse } from "next/server";
 
 async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，试解析 API 直接开放给演示用户使用。
+  // 考试模式不包含登录模块，试解析 API 直接开放使用。
   return null;
 }
 
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "试解析失败，请稍后重试。";
     console.error("POST /api/universal-import/templates/test failed", error);
     await sendDingTalkAlert({
-      title: "万能导入 V2 试解析失败",
+      title: "万能导入试解析失败",
       message,
       tags: {
         module: "rule-test",

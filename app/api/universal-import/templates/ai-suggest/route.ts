@@ -52,7 +52,7 @@ type AiSuggestSuccessResponse = {
       header: string;
       samples: string[];
     }>;
-    tailSourceOptions: Partial<Record<UniversalImportField, string[]>>;
+    tailSourceOptions: Partial<Record<UniversalImportField, Array<{ label: string; sample: string }>>>;
     rowCount: number;
     sectionCount: number;
     textPreview: string;
@@ -136,7 +136,7 @@ const RESPONSE_SCHEMA = {
 } as const;
 
 async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，AI 规则建议 API 直接开放给演示用户使用。
+  // 考试模式不包含登录模块，AI 规则建议 API 直接开放使用。
   return null;
 }
 
@@ -227,7 +227,7 @@ function buildDocumentSummary(
 ) {
   const headerRowIndex = getRecommendedHeaderRowIndex(document, rule);
   const columnOptions = buildColumnOptions(document, headerRowIndex);
-  const tailSourceOptions = inferKeyValueExtractionConfig(document)?.config.keyValueLabels ?? {};
+  const tailSourceOptions = inferKeyValueExtractionConfig(document)?.samples ?? {};
 
   return {
     fileType,
@@ -235,7 +235,7 @@ function buildDocumentSummary(
     headers: columnOptions.map((option) => option.header),
     headerRowIndex,
     columnOptions,
-    tailSourceOptions: tailSourceOptions as Partial<Record<UniversalImportField, string[]>>,
+    tailSourceOptions,
     rowCount: document.rawRows.length,
     sectionCount: document.sections.length,
     textPreview: document.textContent.slice(0, 800),
@@ -574,6 +574,24 @@ function hasNearbyValue(row: string[], cellIndex: number) {
   return false;
 }
 
+function findNearbyValue(row: string[], cellIndex: number) {
+  const inlineKeyValue = parseInlineKeyValueCell(row[cellIndex]);
+  if (inlineKeyValue?.value) {
+    return inlineKeyValue.value;
+  }
+
+  for (let currentIndex = cellIndex + 1; currentIndex < Math.min(row.length, cellIndex + 8); currentIndex += 1) {
+    const value = String(row[currentIndex] ?? "").trim();
+    if (!value || isLikelyKeyValueLabel(value)) {
+      continue;
+    }
+
+    return value;
+  }
+
+  return "";
+}
+
 function isLikelyKeyValueLabel(value: unknown) {
   const normalized = normalizeHeaderText(normalizeKeyValueLabel(value)).replace(/[*＊]/g, "");
   if (!normalized) {
@@ -584,6 +602,20 @@ function isLikelyKeyValueLabel(value: unknown) {
   return [...UNIVERSAL_IMPORT_FIELDS.flatMap((field) => field.aliases), ...extraLabels].some(
     (alias) => normalizeHeaderText(alias) === normalized,
   );
+}
+
+function isKeyValueSummaryRow(row: string[]) {
+  const populated = row.map((cell) => String(cell ?? "").trim()).filter(Boolean);
+  if (populated.length < 2) {
+    return false;
+  }
+
+  const labelCount = populated.filter((cell) => {
+    const inlineKeyValue = parseInlineKeyValueCell(cell);
+    return isLikelyKeyValueLabel(inlineKeyValue?.label ?? cell);
+  }).length;
+
+  return labelCount >= 2;
 }
 
 function isDenseTableHeaderRow(row: string[]) {
@@ -607,6 +639,7 @@ function isDenseTableHeaderRow(row: string[]) {
 
 function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parseImportDocument>>) {
   const labels: Partial<Record<UniversalImportField, string[]>> = {};
+  const samples: Partial<Record<UniversalImportField, Array<{ label: string; sample: string }>>> = {};
   const matchedRowIndexes = new Set<number>();
   let rowOffset = 0;
 
@@ -614,7 +647,7 @@ function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parse
     const rows = section.rows ?? [];
 
     rows.forEach((row, rowIndex) => {
-      if (isDenseTableHeaderRow(row)) {
+      if (isDenseTableHeaderRow(row) && !isKeyValueSummaryRow(row)) {
         return;
       }
 
@@ -646,6 +679,13 @@ function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parse
           }
 
           labels[field] = Array.from(new Set([...(labels[field] ?? []), exactLabel]));
+          const sample = findNearbyValue(row, cellIndex);
+          if (sample) {
+            const currentSamples = samples[field] ?? [];
+            if (!currentSamples.some((item) => item.label === exactLabel && item.sample === sample)) {
+              samples[field] = [...currentSamples, { label: exactLabel, sample }].slice(0, 4);
+            }
+          }
           matchedRowIndexes.add(rowOffset + rowIndex);
         });
       });
@@ -666,6 +706,7 @@ function inferKeyValueExtractionConfig(document: Awaited<ReturnType<typeof parse
 
   return {
     config,
+    samples,
     matchedFields,
     matchedRowIndexes: Array.from(matchedRowIndexes.values()),
   };
@@ -1186,7 +1227,7 @@ export async function POST(request: Request) {
     } catch (llmError) {
       console.error("LLM ai-suggest failed, fallback to heuristic", llmError);
       await sendDingTalkAlert({
-        title: "万能导入 V2 AI 规则生成降级",
+        title: "万能导入 AI 规则生成降级",
         message: llmError instanceof Error ? llmError.message : "LLM 调用失败，已降级为本地兜底规则。",
         tags: {
           module: "ai-suggest",
@@ -1201,7 +1242,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("POST /api/universal-import/templates/ai-suggest failed", error);
     await sendDingTalkAlert({
-      title: "万能导入 V2 AI 规则生成失败",
+      title: "万能导入 AI 规则生成失败",
       message: error instanceof Error ? error.message : "AI 规则建议生成失败，请稍后重试。",
       tags: {
         module: "ai-suggest",

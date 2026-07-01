@@ -1,7 +1,6 @@
 "use client";
 
 import * as XLSX from "xlsx";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -106,6 +105,26 @@ type RuleUpsertResponse = {
   error?: string;
 };
 
+type BatchDeleteResponse = {
+  success?: boolean;
+  deletedCount?: number;
+  error?: string;
+};
+
+type DeleteConfirmTarget =
+  | {
+      type: "history-batch";
+      ids: string[];
+    }
+  | {
+      type: "rule-batch";
+      ids: string[];
+    }
+  | {
+      type: "rule-single";
+      id: string;
+    };
+
 type RuleTestResponse = {
   previewRows?: UniversalImportRow[];
   issues?: string[];
@@ -138,8 +157,13 @@ type ColumnOption = {
 type TailSourceOption = {
   value: string;
   labels: string[];
-  kind: "keyValue" | "regex";
-  regex?: string;
+  samples: string[];
+  kind: "keyValue";
+};
+
+type TailSourceCandidate = string | {
+  label?: unknown;
+  sample?: unknown;
 };
 
 type AiSuggestResponse = {
@@ -149,7 +173,7 @@ type AiSuggestResponse = {
     headers: string[];
     headerRowIndex?: number;
     columnOptions?: ColumnOption[];
-    tailSourceOptions?: Partial<Record<UniversalImportField, string[]>>;
+    tailSourceOptions?: Partial<Record<UniversalImportField, TailSourceCandidate[]>>;
     rowCount: number;
     sectionCount: number;
   };
@@ -172,7 +196,8 @@ type HistoryFilters = {
   query: string;
   externalCode: string;
   receiverName: string;
-  submittedAt: string;
+  submittedAtStart: string;
+  submittedAtEnd: string;
   page: number;
   pageSize: number;
 };
@@ -289,7 +314,8 @@ const DEFAULT_HISTORY_FILTERS: HistoryFilters = {
   query: "",
   externalCode: "",
   receiverName: "",
-  submittedAt: "",
+  submittedAtStart: "",
+  submittedAtEnd: "",
   page: 1,
   pageSize: 10,
 };
@@ -310,15 +336,13 @@ const TRANSFORM_TYPE_LABELS: Record<RuleTransformType, string> = {
   text_record_split: "文本记录拆分",
 };
 
-const TOP_NAV_ITEMS = ["智能多格式批量下单系统"] as const;
-
 const UNIVERSAL_SIDEBAR_MENUS: SidebarMenuItem[] = [
   {
-    label: "智能多格式批量下单系统",
+    label: "万能导入",
     children: [
       { label: "万能导入V2", href: "/universal-import" },
       { label: "规则管理", href: "/universal-import?tab=rules" },
-      { label: "历史运单", href: "/universal-import?tab=history" },
+      { label: "运单管理", href: "/universal-import?tab=history" },
     ],
   },
 ];
@@ -801,56 +825,53 @@ function getTailSourceOption(rule: UniversalImportRuleDsl, field: UniversalImpor
   return {
     value: encodeTailSourceValue(labels),
     labels,
+    samples: [],
     kind: "keyValue",
   };
 }
 
-function getTailRegexSourceOption(rule: UniversalImportRuleDsl, field: UniversalImportField): TailSourceOption | null {
-  const tailTransform = getTailTransform(rule);
-  if (!tailTransform || !isRecord(tailTransform.config)) {
-    return null;
+function normalizeTailSourceCandidates(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
-  const fieldRegex = tailTransform.config.fieldRegex;
-  if (!isRecord(fieldRegex)) {
-    return null;
-  }
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        const label = item.trim();
+        return label ? { label, sample: "" } : null;
+      }
 
-  const regex = String(fieldRegex[field] ?? "").trim();
-  if (!regex) {
-    return null;
-  }
+      if (!isRecord(item)) {
+        return null;
+      }
 
-  return {
-    value: encodeTailRegexSourceValue(field, regex),
-    labels: [UNIVERSAL_IMPORT_FIELD_LABELS[field]],
-    kind: "regex",
-    regex,
-  };
+      const label = String(item.label ?? "").trim();
+      const sample = String(item.sample ?? "").trim();
+      return label ? { label, sample } : null;
+    })
+    .filter((item): item is { label: string; sample: string } => Boolean(item));
 }
 
 function getAvailableTailSourceOptions(
   rule: UniversalImportRuleDsl,
   field: UniversalImportField,
-  discoveredTailSources: Partial<Record<UniversalImportField, string[]>>,
+  discoveredTailSources: Partial<Record<UniversalImportField, TailSourceCandidate[]>>,
 ) {
   const configured = getTailSourceOption(rule, field);
-  const configuredRegex = getTailRegexSourceOption(rule, field);
-  const discoveredLabels = normalizeTailLabels(discoveredTailSources[field]);
+  const discoveredCandidates = normalizeTailSourceCandidates(discoveredTailSources[field]);
+  const discoveredLabels = discoveredCandidates.map((item) => item.label);
   const options = new Map<string, TailSourceOption>();
 
   if (configured) {
     options.set(configured.value, configured);
   }
 
-  if (configuredRegex) {
-    options.set(configuredRegex.value, configuredRegex);
-  }
-
   if (discoveredLabels.length > 0) {
     const discovered = {
       value: encodeTailSourceValue(discoveredLabels),
       labels: discoveredLabels,
+      samples: discoveredCandidates.map((item) => item.sample).filter(Boolean),
       kind: "keyValue" as const,
     };
     options.set(discovered.value, discovered);
@@ -860,11 +881,8 @@ function getAvailableTailSourceOptions(
 }
 
 function getTailSourceOptionLabel(option: TailSourceOption) {
-  if (option.kind === "regex") {
-    return `尾部正则提取：${option.labels.join(" / ")}`;
-  }
-
-  return `尾部信息提取：${option.labels.join(" / ")}`;
+  const samples = option.samples.length > 0 ? `｜样例：${option.samples.slice(0, 2).join(" / ")}` : "";
+  return `文件尾部字段：${option.labels.join(" / ")}${samples}`;
 }
 
 function getMappingSelectValue(
@@ -876,7 +894,7 @@ function getMappingSelectValue(
     return String(currentColumn);
   }
 
-  return getTailSourceOption(rule, field)?.value ?? getTailRegexSourceOption(rule, field)?.value ?? "";
+  return getTailSourceOption(rule, field)?.value ?? "";
 }
 
 function getRuleDefaultValue(rule: UniversalImportRuleDsl, field: UniversalImportField) {
@@ -1120,7 +1138,7 @@ export function UniversalImportClient({
   const [fingerprint, setFingerprint] = useState("");
   const [headers, setHeaders] = useState<string[]>([]);
   const [columnOptions, setColumnOptions] = useState<ColumnOption[]>([]);
-  const [tailSourceOptions, setTailSourceOptions] = useState<Partial<Record<UniversalImportField, string[]>>>({});
+  const [tailSourceOptions, setTailSourceOptions] = useState<Partial<Record<UniversalImportField, TailSourceCandidate[]>>>({});
   const [draftRows, setDraftRows] = useState<DraftRow[]>([]);
   const [mapping, setMapping] = useState<UniversalImportMapping>(DEFAULT_MAPPING);
   const [ruleDsl, setRuleDsl] = useState<UniversalImportRuleDsl>(buildDefaultRuleDsl(DEFAULT_MAPPING, "excel"));
@@ -1143,7 +1161,10 @@ export function UniversalImportClient({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyDeleting, setHistoryDeleting] = useState(false);
   const [historyData, setHistoryData] = useState<ShipmentHistoryResponse>({});
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([]);
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<DeleteConfirmTarget | null>(null);
   const [historyFilters, setHistoryFilters] = useState<HistoryFilters>(DEFAULT_HISTORY_FILTERS);
   const [templateInfo, setTemplateInfo] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
@@ -1153,9 +1174,11 @@ export function UniversalImportClient({
   const [previewRenderLimit, setPreviewRenderLimit] = useState(PREVIEW_INITIAL_RENDER_COUNT);
   const [ruleList, setRuleList] = useState<RuleRecord[]>([]);
   const [ruleLoading, setRuleLoading] = useState(false);
+  const [ruleDeleting, setRuleDeleting] = useState(false);
   const [ruleStatus, setRuleStatus] = useState("");
   const [ruleNameInput, setRuleNameInput] = useState("");
   const [selectedRuleId, setSelectedRuleId] = useState("");
+  const [selectedRuleIds, setSelectedRuleIds] = useState<string[]>([]);
   const [ruleTestSummary, setRuleTestSummary] = useState("");
   const [aiSummary, setAiSummary] = useState("");
   const [aiSuggesting, setAiSuggesting] = useState(false);
@@ -1170,9 +1193,9 @@ export function UniversalImportClient({
   const [submitBlockingIssues, setSubmitBlockingIssues] = useState<string[]>([]);
   const [transformConfigDrafts, setTransformConfigDrafts] = useState<Record<string, string>>({});
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
-    "智能多格式批量下单系统",
+    "万能导入",
   ]);
-  const [activeMenuPath, setActiveMenuPath] = useState("智能多格式批量下单系统/万能导入V2");
+  const [activeMenuPath, setActiveMenuPath] = useState("万能导入/万能导入V2");
   const deferredDraftRows = useDeferredValue(draftRows);
 
   const existingExternalCodes = useMemo(
@@ -1219,15 +1242,22 @@ export function UniversalImportClient({
   );
 
   const historyShipmentCount = historyData.total ?? 0;
+  const currentHistoryRecords = historyData.records ?? [];
   const historyItemCount = useMemo(
-    () => (historyData.records ?? []).reduce((sum, record) => sum + record.items.length, 0),
-    [historyData.records],
+    () => currentHistoryRecords.reduce((sum, record) => sum + record.items.length, 0),
+    [currentHistoryRecords],
   );
   const [selectedHistoryId, setSelectedHistoryId] = useState("");
   const selectedHistoryRecord = useMemo(
     () => historyData.records?.find((record) => record.id === selectedHistoryId) ?? historyData.records?.[0] ?? null,
     [historyData.records, selectedHistoryId],
   );
+  const currentHistoryIds = useMemo(() => currentHistoryRecords.map((record) => record.id), [currentHistoryRecords]);
+  const selectedHistoryIdSet = useMemo(() => new Set(selectedHistoryIds), [selectedHistoryIds]);
+  const allHistoryRecordsSelected =
+    currentHistoryIds.length > 0 && currentHistoryIds.every((id) => selectedHistoryIdSet.has(id));
+  const selectedRuleIdSet = useMemo(() => new Set(selectedRuleIds), [selectedRuleIds]);
+  const allRulesSelected = ruleList.length > 0 && ruleList.every((rule) => selectedRuleIdSet.has(rule.id));
   const hasBlockingErrors = validation.issues.length > 0;
   const hasSameBatchDuplicateExternalCodes = sameBatchDuplicateReport.summaries.length > 0;
   const allRowsSelected = draftRows.length > 0 && selectedIds.length === draftRows.length;
@@ -1461,7 +1491,8 @@ export function UniversalImportClient({
       if (normalizedFilters.query.trim()) params.set("query", normalizedFilters.query.trim());
       if (normalizedFilters.externalCode.trim()) params.set("externalCode", normalizedFilters.externalCode.trim());
       if (normalizedFilters.receiverName.trim()) params.set("receiverName", normalizedFilters.receiverName.trim());
-      if (normalizedFilters.submittedAt.trim()) params.set("submittedAt", normalizedFilters.submittedAt.trim());
+      if (normalizedFilters.submittedAtStart.trim()) params.set("submittedAtStart", normalizedFilters.submittedAtStart.trim());
+      if (normalizedFilters.submittedAtEnd.trim()) params.set("submittedAtEnd", normalizedFilters.submittedAtEnd.trim());
       params.set("page", String(normalizedFilters.page));
       params.set("pageSize", String(normalizedFilters.pageSize));
       const response = await fetch(`/api/universal-import/shipments?${params.toString()}`, {
@@ -1484,6 +1515,10 @@ export function UniversalImportClient({
       setSelectedHistoryId((current) =>
         data.records?.some((record) => record.id === current) ? current : data.records?.[0]?.id ?? "",
       );
+      setSelectedHistoryIds((current) => {
+        const nextRecordIds = new Set((data.records ?? []).map((record) => record.id));
+        return current.filter((id) => nextRecordIds.has(id));
+      });
       historyLoadedOnceRef.current = true;
     } catch (error) {
       if (controller.signal.aborted) {
@@ -1549,6 +1584,10 @@ export function UniversalImportClient({
         throw new Error(data.error ?? "加载规则列表失败，请稍后重试。");
       }
       setRuleList(data.templates);
+      setSelectedRuleIds((current) => {
+        const nextRuleIds = new Set(data.templates?.map((rule) => rule.id) ?? []);
+        return current.filter((id) => nextRuleIds.has(id));
+      });
     } catch (error) {
       setRuleStatus(error instanceof Error ? error.message : "加载规则列表失败，请稍后重试。");
     } finally {
@@ -1985,7 +2024,19 @@ export function UniversalImportClient({
     setTemplateInfo(`当前正在编辑规则：${rule.ruleName}`);
   }
 
-  async function handleDeleteRule(ruleId: string) {
+  function openDeleteConfirm(target: DeleteConfirmTarget) {
+    setDeleteConfirmTarget(target);
+  }
+
+  function closeDeleteConfirm() {
+    if (historyDeleting || ruleDeleting) {
+      return;
+    }
+    setDeleteConfirmTarget(null);
+  }
+
+  async function deleteRuleById(ruleId: string) {
+    setRuleDeleting(true);
     try {
       const response = await fetch(`/api/universal-import/templates/${ruleId}`, {
         method: "DELETE",
@@ -2004,7 +2055,133 @@ export function UniversalImportClient({
       await loadRules();
     } catch (error) {
       setRuleStatus(error instanceof Error ? error.message : "删除规则失败，请稍后重试。");
+    } finally {
+      setRuleDeleting(false);
     }
+  }
+
+  async function handleDeleteRule(ruleId: string) {
+    openDeleteConfirm({ type: "rule-single", id: ruleId });
+  }
+
+  function toggleHistorySelection(recordId: string, checked: boolean) {
+    setSelectedHistoryIds((current) =>
+      checked ? Array.from(new Set([...current, recordId])) : current.filter((id) => id !== recordId),
+    );
+  }
+
+  function toggleAllHistorySelection(checked: boolean) {
+    setSelectedHistoryIds((current) => {
+      if (!checked) {
+        return current.filter((id) => !currentHistoryIds.includes(id));
+      }
+      return Array.from(new Set([...current, ...currentHistoryIds]));
+    });
+  }
+
+  async function deleteHistoryByIds(ids: string[]) {
+    setHistoryDeleting(true);
+    setHistoryStatus("");
+    try {
+      const response = await fetch("/api/universal-import/shipments", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ids }),
+      });
+      const data = (await response.json()) as BatchDeleteResponse;
+      if (!response.ok || !data.success) {
+        throw new Error(data.error ?? "批量删除历史运单失败，请稍后重试。");
+      }
+      setSelectedHistoryIds([]);
+      if (ids.includes(selectedHistoryId)) {
+        setSelectedHistoryId("");
+      }
+      setHistoryStatus(`已删除 ${data.deletedCount ?? ids.length} 条历史运单。`);
+      historyCodesLoadedRef.current = false;
+      await loadHistory({ ...historyFilters });
+      void loadHistoryCodes();
+    } catch (error) {
+      setHistoryStatus(error instanceof Error ? error.message : "批量删除历史运单失败，请稍后重试。");
+    } finally {
+      setHistoryDeleting(false);
+    }
+  }
+
+  async function handleBatchDeleteHistory() {
+    const ids = selectedHistoryIds;
+    if (ids.length === 0) {
+      setHistoryStatus("请先勾选要删除的历史运单。");
+      return;
+    }
+    openDeleteConfirm({ type: "history-batch", ids });
+  }
+
+  function toggleRuleSelection(ruleId: string, checked: boolean) {
+    setSelectedRuleIds((current) =>
+      checked ? Array.from(new Set([...current, ruleId])) : current.filter((id) => id !== ruleId),
+    );
+  }
+
+  function toggleAllRuleSelection(checked: boolean) {
+    setSelectedRuleIds(checked ? ruleList.map((rule) => rule.id) : []);
+  }
+
+  async function deleteRulesByIds(ids: string[]) {
+    setRuleDeleting(true);
+    setRuleStatus("");
+    try {
+      const response = await fetch("/api/universal-import/templates", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ids }),
+      });
+      const data = (await response.json()) as BatchDeleteResponse;
+      if (!response.ok || !data.success) {
+        throw new Error(data.error ?? "批量删除规则失败，请稍后重试。");
+      }
+      setSelectedRuleIds([]);
+      if (ids.includes(selectedRuleId)) {
+        setSelectedRuleId("");
+        setRuleNameInput("");
+        setTemplateInfo("请先手动选择解析规则，不做自动匹配。");
+        setStatus("当前选中的规则已删除，请重新选择或新建规则。");
+      }
+      setRuleStatus(`已删除 ${data.deletedCount ?? ids.length} 条规则。`);
+      await loadRules();
+    } catch (error) {
+      setRuleStatus(error instanceof Error ? error.message : "批量删除规则失败，请稍后重试。");
+    } finally {
+      setRuleDeleting(false);
+    }
+  }
+
+  async function handleBatchDeleteRules() {
+    const ids = selectedRuleIds;
+    if (ids.length === 0) {
+      setRuleStatus("请先勾选要删除的规则。");
+      return;
+    }
+    openDeleteConfirm({ type: "rule-batch", ids });
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteConfirmTarget) {
+      return;
+    }
+
+    if (deleteConfirmTarget.type === "history-batch") {
+      await deleteHistoryByIds(deleteConfirmTarget.ids);
+    } else if (deleteConfirmTarget.type === "rule-batch") {
+      await deleteRulesByIds(deleteConfirmTarget.ids);
+    } else {
+      await deleteRuleById(deleteConfirmTarget.id);
+    }
+
+    setDeleteConfirmTarget(null);
   }
 
   async function handleCopyRule(rule: RuleRecord) {
@@ -2300,16 +2477,16 @@ export function UniversalImportClient({
 
   useEffect(() => {
     if (activeTab === "history") {
-      setActiveMenuPath("智能多格式批量下单系统/历史运单");
+      setActiveMenuPath("万能导入/运单管理");
       return;
     }
 
     if (activeTab === "rules") {
-      setActiveMenuPath("智能多格式批量下单系统/规则管理");
+      setActiveMenuPath("万能导入/规则管理");
       return;
     }
 
-    setActiveMenuPath("智能多格式批量下单系统/万能导入V2");
+    setActiveMenuPath("万能导入/万能导入V2");
   }, [activeTab]);
 
   useEffect(() => {
@@ -2414,6 +2591,8 @@ export function UniversalImportClient({
     : hasBlockingErrors
       ? `存在 ${rowErrorSummary.length} 个未修正问题，请先修正后再提交。`
       : "";
+  const currentMenuTitle =
+    activeTab === "rules" ? "规则管理" : activeTab === "history" ? "历史运单" : "运单管理";
 
   return (
     <main className="dashboard-shell">
@@ -2422,58 +2601,24 @@ export function UniversalImportClient({
           <div className="brand-logo">AI</div>
           <div className="brand-copy">
             <strong>智能多格式批量下单系统</strong>
-            <span>SMART MULTI-FORMAT ORDERING</span>
           </div>
         </div>
 
         <nav className="sidebar-nav" aria-label="系统菜单">
           {renderSidebarMenus(UNIVERSAL_SIDEBAR_MENUS)}
         </nav>
-
-        <div className="sidebar-env-card">
-          <div>
-            <strong>{operatorName}</strong>
-            <span>考试演示模式，仅保留本次考试功能菜单。</span>
-          </div>
-          <span className="env-toggle active" />
-        </div>
       </aside>
 
       <div className="dashboard-main">
         <header className="global-topbar">
           <div className="global-topbar-nav">
-            {TOP_NAV_ITEMS.map((item) => (
-              <button
-                type="button"
-                className="global-nav-item active"
-                key={item}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-
-          <div className="global-topbar-tools">
-            <span className="global-pill">万能导入V2</span>
-            <span className="global-pill alert">考试演示模式</span>
-            <span className="user-chip">{operatorName}</span>
+            <span className="global-nav-current">{currentMenuTitle}</span>
           </div>
         </header>
 
         <section className="workspace-shell">
           <div className="workspace-tabbar">
-            <Link className="tabbar-back" href="/universal-import">
-              返回
-            </Link>
-            <button type="button" className={`workspace-tab${activeTab === "import" ? " active" : ""}`} onClick={() => setActiveTab("import")}>
-              万能导入V2
-            </button>
-            <button type="button" className={`workspace-tab${activeTab === "history" ? " active" : ""}`} onClick={() => setActiveTab("history")}>
-              历史运单
-            </button>
-            <button type="button" className={`workspace-tab${activeTab === "rules" ? " active" : ""}`} onClick={() => setActiveTab("rules")}>
-              规则管理
-            </button>
+            <span className="workspace-tab-current">{currentMenuTitle}</span>
           </div>
 
           <div className="workspace-stage">
@@ -2482,8 +2627,8 @@ export function UniversalImportClient({
                 <section className="workspace-card">
                   <div className="workspace-header">
                     <div>
-                      <p className="workspace-breadcrumb">智能多格式批量下单系统 / 万能导入V2</p>
-                      <h1>智能多格式批量下单系统</h1>
+                      <p className="workspace-breadcrumb">运单管理</p>
+                      <h1>运单管理</h1>
                       <p>当前版本已支持 Excel / Word / PDF 样例试解析、AI 规则建议、规则在线编辑、历史入库与规则管理。</p>
                     </div>
                     <div className="import-stat-grid">
@@ -3177,7 +3322,7 @@ export function UniversalImportClient({
               <section className="workspace-card">
                 <div className="workspace-header" style={{ marginBottom: 16 }}>
                   <div>
-                    <p className="workspace-breadcrumb">智能多格式批量下单系统 / 历史运单</p>
+                    <p className="workspace-breadcrumb">历史运单</p>
                     <h1>历史运单</h1>
                   </div>
                   <div className="workspace-header-meta">
@@ -3247,7 +3392,21 @@ export function UniversalImportClient({
                     </label>
                     <label className="search-field">
                       <span>提交日期</span>
-                      <input type="date" value={historyFilters.submittedAt} onChange={(event) => setHistoryFilters((current) => ({ ...current, submittedAt: event.target.value }))} />
+                      <div className="date-range-inputs">
+                        <input
+                          type="date"
+                          value={historyFilters.submittedAtStart}
+                          onChange={(event) => setHistoryFilters((current) => ({ ...current, submittedAtStart: event.target.value }))}
+                          aria-label="提交开始日期"
+                        />
+                        <span>至</span>
+                        <input
+                          type="date"
+                          value={historyFilters.submittedAtEnd}
+                          onChange={(event) => setHistoryFilters((current) => ({ ...current, submittedAtEnd: event.target.value }))}
+                          aria-label="提交结束日期"
+                        />
+                      </div>
                     </label>
                     <div className="search-actions history-search-actions">
                       <button type="button" className="primary-button" onClick={() => void loadHistory({ ...historyFilters, page: 1 })}>查询</button>
@@ -3259,10 +3418,31 @@ export function UniversalImportClient({
                   </div>
                 </div>
 
+                <div className="history-bulk-toolbar">
+                  <span>已选 {selectedHistoryIds.length} 条</span>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void handleBatchDeleteHistory()}
+                    disabled={historyLoading || historyDeleting || selectedHistoryIds.length === 0}
+                  >
+                    {historyDeleting ? "删除中..." : `批量删除（${selectedHistoryIds.length}）`}
+                  </button>
+                </div>
+
                 <div className="table-shell import-history-shell">
                   <table className="data-table history-table">
                     <thead>
                       <tr>
+                        <th className="checkbox-cell">
+                          <input
+                            type="checkbox"
+                            checked={allHistoryRecordsSelected}
+                            disabled={historyLoading || currentHistoryIds.length === 0}
+                            onChange={(event) => toggleAllHistorySelection(event.target.checked)}
+                            aria-label="全选当前页历史运单"
+                          />
+                        </th>
                         <th>外部编码</th>
                         <th>收货信息</th>
                         <th>SKU 数</th>
@@ -3273,16 +3453,24 @@ export function UniversalImportClient({
                     </thead>
                     <tbody>
                       {historyLoading ? (
-                        <tr><td colSpan={6} className="empty-row">正在加载历史数据...</td></tr>
-                      ) : (historyData.records ?? []).length === 0 ? (
-                        <tr><td colSpan={6} className="empty-row">当前筛选条件下暂无历史运单，可调整筛选条件后重试。</td></tr>
+                        <tr><td colSpan={7} className="empty-row">正在加载历史数据...</td></tr>
+                      ) : currentHistoryRecords.length === 0 ? (
+                        <tr><td colSpan={7} className="empty-row">当前筛选条件下暂无历史运单，可调整筛选条件后重试。</td></tr>
                       ) : (
-                        historyData.records?.map((record) => (
+                        currentHistoryRecords.map((record) => (
                           <tr
                             key={record.id}
                             className={selectedHistoryRecord?.id === record.id ? "history-row-active" : ""}
                             onClick={() => setSelectedHistoryId(record.id)}
                           >
+                            <td className="checkbox-cell" onClick={(event) => event.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={selectedHistoryIdSet.has(record.id)}
+                                onChange={(event) => toggleHistorySelection(record.id, event.target.checked)}
+                                aria-label={`选择历史运单 ${record.externalCode}`}
+                              />
+                            </td>
                             <td>{record.externalCode}</td>
                             <td>{formatReceiverSummary(record)}</td>
                             <td>{record.items.length}</td>
@@ -3415,7 +3603,7 @@ export function UniversalImportClient({
               <section className="workspace-card">
                 <div className="workspace-header" style={{ marginBottom: 16 }}>
                   <div>
-                    <p className="workspace-breadcrumb">智能多格式批量下单系统 / 规则管理</p>
+                    <p className="workspace-breadcrumb">规则管理</p>
                     <h1>规则管理中心</h1>
                     <p>支持查看规则列表、保存当前规则、更新规则版本、应用规则、删除规则，以及结合样例文件执行试解析。</p>
                   </div>
@@ -3599,6 +3787,14 @@ export function UniversalImportClient({
                         <p className="section-kicker">规则列表</p>
                         <h3>已保存的导入规则</h3>
                       </div>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void handleBatchDeleteRules()}
+                        disabled={ruleLoading || ruleDeleting || selectedRuleIds.length === 0}
+                      >
+                        {ruleDeleting ? "删除中..." : `批量删除（${selectedRuleIds.length}）`}
+                      </button>
                       <button type="button" className="secondary-button" onClick={() => void loadRules()} disabled={ruleLoading}>
                         {ruleLoading ? "加载中..." : "刷新规则"}
                       </button>
@@ -3608,6 +3804,15 @@ export function UniversalImportClient({
                       <table className="data-table history-table">
                         <thead>
                           <tr>
+                            <th className="checkbox-cell">
+                              <input
+                                type="checkbox"
+                                checked={allRulesSelected}
+                                disabled={ruleLoading || ruleList.length === 0}
+                                onChange={(event) => toggleAllRuleSelection(event.target.checked)}
+                                aria-label="全选规则"
+                              />
+                            </th>
                             <th>规则名称</th>
                             <th>文件类型</th>
                             <th>版本</th>
@@ -3618,12 +3823,20 @@ export function UniversalImportClient({
                         </thead>
                         <tbody>
                           {ruleLoading ? (
-                            <tr><td colSpan={6} className="empty-row">正在加载规则列表...</td></tr>
+                            <tr><td colSpan={7} className="empty-row">正在加载规则列表...</td></tr>
                           ) : ruleList.length === 0 ? (
-                            <tr><td colSpan={6} className="empty-row">暂无已保存规则，可点击上方“新建空白规则”开始配置。</td></tr>
+                            <tr><td colSpan={7} className="empty-row">暂无已保存规则，可点击上方“新建空白规则”开始配置。</td></tr>
                           ) : (
                             ruleList.map((rule) => (
                               <tr key={rule.id} className={selectedRuleId === rule.id ? "rule-row-active" : ""}>
+                                <td className="checkbox-cell" onClick={(event) => event.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedRuleIdSet.has(rule.id)}
+                                    onChange={(event) => toggleRuleSelection(rule.id, event.target.checked)}
+                                    aria-label={`选择规则 ${rule.ruleName}`}
+                                  />
+                                </td>
                                 <td>{rule.ruleName}</td>
                                 <td>{rule.fileType}</td>
                                 <td>v{rule.version}</td>
@@ -3652,6 +3865,47 @@ export function UniversalImportClient({
           </div>
         </section>
       </div>
+
+      {deleteConfirmTarget ? (
+        <div className="confirm-backdrop" role="presentation">
+          <div className="delete-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title">
+            <div className="delete-confirm-header">
+              <h2 id="delete-confirm-title">提示</h2>
+              <button
+                type="button"
+                className="delete-confirm-close"
+                onClick={closeDeleteConfirm}
+                aria-label="关闭"
+                disabled={historyDeleting || ruleDeleting}
+              >
+                ×
+              </button>
+            </div>
+            <div className="delete-confirm-body">
+              <span className="delete-confirm-icon" aria-hidden="true">!</span>
+              <p>删除当前数据将无法恢复，您确定删除当前数据?</p>
+            </div>
+            <div className="delete-confirm-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={closeDeleteConfirm}
+                disabled={historyDeleting || ruleDeleting}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void handleConfirmDelete()}
+                disabled={historyDeleting || ruleDeleting}
+              >
+                {historyDeleting || ruleDeleting ? "删除中..." : "确认"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="toast-stack" aria-live="polite" aria-atomic="true">
         {toasts.map((toast) => (

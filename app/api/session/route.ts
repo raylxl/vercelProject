@@ -23,6 +23,6 @@ export async function PUT() {
 }
 
 export async function DELETE() {
-  // 退出登录模块已停用，返回当前考试演示状态。
+  // 退出登录模块已停用，返回当前访问状态。
   return GET();
 }

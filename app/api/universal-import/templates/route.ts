@@ -13,7 +13,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，规则管理 API 直接开放给演示用户使用。
+  // 考试模式不包含登录模块，规则管理 API 直接开放使用。
   return null;
 }
 
@@ -107,5 +107,65 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("POST /api/universal-import/templates failed", error);
     return NextResponse.json({ error: "保存规则失败，请稍后重试。" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const unauthorizedResponse = await ensureExamModeAccess();
+
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
+
+    const body = (await request.json().catch(() => ({}))) as {
+      ids?: unknown;
+    };
+    const ids = Array.isArray(body.ids)
+      ? Array.from(new Set(body.ids.map((id) => String(id ?? "").trim()).filter(Boolean)))
+      : [];
+
+    if (ids.length === 0) {
+      return NextResponse.json({ error: "请选择要删除的规则。" }, { status: 400 });
+    }
+
+    const referencedRules = await prisma.universalImportRule.findMany({
+      where: {
+        id: {
+          in: ids,
+        },
+        batches: {
+          some: {},
+        },
+      },
+      select: {
+        id: true,
+        ruleName: true,
+      },
+    });
+
+    if (referencedRules.length > 0) {
+      return NextResponse.json(
+        {
+          error: `已选规则中有 ${referencedRules.length} 条被导入批次引用，暂不允许删除。`,
+          blockedIds: referencedRules.map((rule) => rule.id),
+          blockedNames: referencedRules.map((rule) => rule.ruleName),
+        },
+        { status: 400 },
+      );
+    }
+
+    const result = await prisma.universalImportRule.deleteMany({
+      where: {
+        id: {
+          in: ids,
+        },
+      },
+    });
+
+    return NextResponse.json({ success: true, deletedCount: result.count });
+  } catch (error) {
+    console.error("DELETE /api/universal-import/templates failed", error);
+    return NextResponse.json({ error: "批量删除规则失败，请稍后重试。" }, { status: 500 });
   }
 }

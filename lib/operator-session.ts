@@ -1,4 +1,4 @@
-const EXAM_OPERATOR_NAME = "考试演示用户";
+const EXAM_OPERATOR_NAME = "系统用户";
 
 type AccountActionResult =
   | {
@@ -16,7 +16,7 @@ export function normalizeOperatorName(input: string | null | undefined) {
 }
 
 export async function authenticateUser(): Promise<AccountActionResult> {
-  // 本次考试不包含登录模块。保留同名函数仅为兼容旧接口，始终进入考试演示用户。
+  // 本次考试不包含登录模块。保留同名函数仅为兼容旧接口，始终进入系统用户。
   return {
     success: true,
     username: EXAM_OPERATOR_NAME,
@@ -32,7 +32,7 @@ export async function registerUser(): Promise<AccountActionResult> {
 }
 
 export async function isAuthenticated() {
-  // 考试模式：万能导入 V2 直接可访问，避免非考试登录流程干扰验收。
+  // 考试模式：万能导入直接可访问，避免非考试登录流程干扰验收。
   return true;
 }
 

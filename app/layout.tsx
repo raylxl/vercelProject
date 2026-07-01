@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "智能多格式批量下单系统",
-  description: "智能多格式批量下单系统，支持万能导入V2、规则管理与历史运单查询。",
+  title: "万能导入",
+  description: "万能导入，支持运单管理、规则管理与历史运单查询。",
 };
 
 export default function RootLayout({

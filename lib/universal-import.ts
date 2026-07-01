@@ -21,7 +21,7 @@ export const UNIVERSAL_IMPORT_FIELDS = [
     key: "receiverPhone",
     label: "收件人电话",
     required: false,
-    aliases: ["收件人电话", "收货人电话", "联系电话", "手机", "receiverphone", "recipientphone"],
+    aliases: ["收件人电话", "收货人电话", "收件人手机号", "收货人手机号", "联系电话", "手机号", "手机", "电话", "receiverphone", "recipientphone"],
   },
   {
     key: "receiverAddress",
@@ -103,6 +103,10 @@ function isInventoryMetricQuantityHeader(value: string) {
   return /(库存|在库|可用|结余|冻结|分配|待移入|下单后)/.test(value);
 }
 
+function isContactPhoneHeader(value: string) {
+  return /(电话|手机|手机号|联系方式|联系电话|号码)/.test(value);
+}
+
 export function buildTemplateFingerprint(sheetName: string, headerRow: unknown[]) {
   const headers = headerRow.map((value) => normalizeText(value));
   return `${normalizeText(sheetName)}::${headers.join("|")}`;
@@ -128,6 +132,10 @@ export function inferMappingFromHeaders(headers: unknown[]): UniversalImportMapp
         }
 
         if (field.key === "skuQuantity" && alias === "数量" && isInventoryMetricQuantityHeader(header)) {
+          return currentScore;
+        }
+
+        if (field.key === "receiverName" && isContactPhoneHeader(header)) {
           return currentScore;
         }
 

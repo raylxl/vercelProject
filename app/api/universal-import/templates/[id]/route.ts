@@ -13,7 +13,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，规则维护 API 直接开放给演示用户使用。
+  // 考试模式不包含登录模块，规则维护 API 直接开放使用。
   return null;
 }
 

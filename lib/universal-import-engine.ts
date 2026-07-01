@@ -274,6 +274,25 @@ function findAdjacentKeyValue(row: string[], index: number) {
   return "";
 }
 
+function isSameKeyValueLabel(left: unknown, right: unknown) {
+  const normalizedLeft = normalizeKeyValueToken(left);
+  const normalizedRight = normalizeKeyValueToken(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function isKeyValueSummaryRow(row: string[]) {
+  const populated = row.map((cell) => normalizeCell(cell)).filter(Boolean);
+  if (populated.length < 2) {
+    return false;
+  }
+
+  const labelCount = populated.filter((cell) => {
+    const inlineKeyValue = parseInlineKeyValueCell(cell);
+    return isLikelyKeyValueLabel(inlineKeyValue?.label ?? cell);
+  }).length;
+  return labelCount >= 2;
+}
+
 function isDenseTableHeaderRow(row: string[]) {
   const populated = row.map((cell) => normalizeCell(cell)).filter(Boolean);
   if (populated.length < 8) {
@@ -640,10 +659,13 @@ function extractFieldsByRegex(text: string, fieldRegex: unknown) {
       return;
     }
 
-    output[field] = cleanExtractedField(
+    const extractedValue = cleanExtractedField(
       field,
       match.groups?.[field]?.replace(/\s+/g, " ").trim() ?? extractTextField(text, normalized[field]),
     );
+    if (shouldAcceptFieldValue(field, extractedValue)) {
+      output[field] = extractedValue;
+    }
   });
 
   return output;
@@ -665,6 +687,27 @@ function isWeakExtractedValue(value: string | undefined) {
   return !value || value === "|" || /^[\s|]+$/.test(value);
 }
 
+function isPhoneLikeValue(value: unknown) {
+  return /^(?:1\d{10}|(?:0\d{2,3}-?)?\d{7,8})$/.test(normalizeCell(value).replace(/\s+/g, ""));
+}
+
+function isContactPhoneLabelValue(value: unknown) {
+  const normalized = normalizeKeyValueToken(value);
+  return /^(?:收件人电话|收货人电话|收件人手机号|收货人手机号|联系电话|联系方式|手机号|手机|电话|号码)$/.test(normalized);
+}
+
+function shouldAcceptFieldValue(field: UniversalImportField, value: string) {
+  if (field === "receiverName" && (isPhoneLikeValue(value) || isContactPhoneLabelValue(value))) {
+    return false;
+  }
+
+  return true;
+}
+
+function isWeakExtractedFieldValue(field: UniversalImportField, value: string | undefined) {
+  return isWeakExtractedValue(value) || !shouldAcceptFieldValue(field, value ?? "");
+}
+
 function extractAdjacentKeyValueFields(
   section: ParsedDocument["sections"][number],
   fieldRegex: unknown,
@@ -673,7 +716,7 @@ function extractAdjacentKeyValueFields(
   const normalized = normalizeFieldRegexMap(fieldRegex);
 
   (Object.keys(normalized) as UniversalImportField[]).forEach((field) => {
-    if (!isWeakExtractedValue(current[field])) {
+    if (!isWeakExtractedFieldValue(field, current[field])) {
       return;
     }
 
@@ -692,8 +735,9 @@ function extractAdjacentKeyValueFields(
       }
 
       const value = row.slice(labelIndex + 1).map((cell) => normalizeCell(cell)).find(Boolean);
-      if (value) {
-        current[field] = cleanExtractedField(field, value);
+      const extractedValue = cleanExtractedField(field, value ?? "");
+      if (extractedValue && shouldAcceptFieldValue(field, extractedValue)) {
+        current[field] = extractedValue;
         return;
       }
     }
@@ -712,7 +756,7 @@ function extractFieldsByKeyValueLabels(
   }
 
   (Object.keys(keyValueLabels) as UniversalImportField[]).forEach((field) => {
-    if (!isImportField(field) || !isWeakExtractedValue(current[field])) {
+    if (!isImportField(field) || !isWeakExtractedFieldValue(field, current[field])) {
       return;
     }
 
@@ -723,8 +767,7 @@ function extractFieldsByKeyValueLabels(
 
     for (const row of rows) {
       const labelIndex = row.findIndex((cell) => {
-        const normalizedCell = normalizeCell(cell).replace(/[:：]$/, "");
-        return labels.some((label) => normalizedCell === label.replace(/[:：]$/, ""));
+        return labels.some((label) => isSameKeyValueLabel(cell, label));
       });
 
       if (labelIndex < 0) {
@@ -732,8 +775,9 @@ function extractFieldsByKeyValueLabels(
       }
 
       const value = row.slice(labelIndex + 1).map((cell) => normalizeCell(cell)).find(Boolean);
-      if (value) {
-        current[field] = cleanExtractedField(field, value);
+      const extractedValue = cleanExtractedField(field, value ?? "");
+      if (extractedValue && shouldAcceptFieldValue(field, extractedValue)) {
+        current[field] = extractedValue;
         return current;
       }
     }
@@ -919,8 +963,12 @@ function extractTailFields(
   const keyValueLabels = config?.keyValueLabels;
   if (keyValueLabels && typeof keyValueLabels === "object" && !Array.isArray(keyValueLabels)) {
     const labels = keyValueLabels as Partial<Record<UniversalImportField, string[]>>;
-    section.rows.forEach((row) => {
-      if (isDenseTableHeaderRow(row)) {
+    const keyValueRows = source === "full_text" || source === "document"
+      ? document.sections.flatMap((documentSection) => documentSection.rows)
+      : section.rows;
+
+    keyValueRows.forEach((row) => {
+      if (isDenseTableHeaderRow(row) && !isKeyValueSummaryRow(row)) {
         return;
       }
 
@@ -929,15 +977,21 @@ function extractTailFields(
           const candidates = labels[field] ?? [];
           const inlineKeyValue = parseInlineKeyValueCell(cell);
           const inlineMatched = inlineKeyValue
-            ? candidates.some((label) => normalizeKeyValueLabel(inlineKeyValue.label) === normalizeKeyValueLabel(label))
+            ? candidates.some((label) => isSameKeyValueLabel(inlineKeyValue.label, label))
             : false;
-          if (!output[field] && inlineMatched) {
-            output[field] = cleanExtractedField(field, inlineKeyValue?.value ?? "");
+          if (isWeakExtractedFieldValue(field, output[field]) && inlineMatched) {
+            const extractedValue = cleanExtractedField(field, inlineKeyValue?.value ?? "");
+            if (shouldAcceptFieldValue(field, extractedValue)) {
+              output[field] = extractedValue;
+            }
             return;
           }
 
-          if (!output[field] && candidates.some((label) => normalizeKeyValueLabel(cell) === normalizeKeyValueLabel(label))) {
-            output[field] = cleanExtractedField(field, findAdjacentKeyValue(row, index));
+          if (isWeakExtractedFieldValue(field, output[field]) && candidates.some((label) => isSameKeyValueLabel(cell, label))) {
+            const extractedValue = cleanExtractedField(field, findAdjacentKeyValue(row, index));
+            if (shouldAcceptFieldValue(field, extractedValue)) {
+              output[field] = extractedValue;
+            }
           }
         });
       });
@@ -966,7 +1020,7 @@ function parseRowsByMapping(
 
   sourceRows.forEach((sourceRow, relativeIndex) => {
     const joined = sourceRow.join(" ");
-    if (!joined.trim() || skipRowRegex?.test(joined)) {
+    if (!joined.trim() || skipRowRegex?.test(joined) || isKeyValueSummaryRow(sourceRow)) {
       return;
     }
 
@@ -978,7 +1032,7 @@ function parseRowsByMapping(
     });
     (Object.keys(columns) as UniversalImportField[]).forEach((field) => {
       const value = getColumnValue(sourceRow, columns[field]);
-      if (value) {
+      if (value && shouldAcceptFieldValue(field, value)) {
         values[field] = value;
       }
     });

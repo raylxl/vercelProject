@@ -49,7 +49,7 @@ type PreparedShipmentDraft = ShipmentDraft & {
 };
 
 async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，万能导入 V2 API 直接开放给演示用户使用。
+  // 考试模式不包含登录模块，万能导入 API 直接开放使用。
   return null;
 }
 
@@ -63,19 +63,34 @@ function parsePagination(searchParams: URLSearchParams) {
   return { page, pageSize };
 }
 
-function parseSubmittedDateRange(submittedAt: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(submittedAt)) {
+function parseSubmittedDate(dateValue: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
     return null;
   }
 
-  const start = new Date(`${submittedAt}T00:00:00+08:00`);
-  if (Number.isNaN(start.getTime())) {
+  const date = new Date(`${dateValue}T00:00:00+08:00`);
+  if (Number.isNaN(date.getTime())) {
     return null;
+  }
+
+  return date;
+}
+
+function parseSubmittedDateRange(startDateValue: string, endDateValue: string) {
+  const start = parseSubmittedDate(startDateValue);
+  const endBase = parseSubmittedDate(endDateValue);
+  const end = endBase ? new Date(endBase.getTime() + 24 * 60 * 60 * 1000) : null;
+
+  if (start && end && start > end) {
+    return {
+      start: endBase,
+      end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
+    };
   }
 
   return {
     start,
-    end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
+    end,
   };
 }
 
@@ -176,9 +191,11 @@ export async function GET(request: Request) {
     const externalCode = searchParams.get("externalCode")?.trim() ?? "";
     const receiverName = searchParams.get("receiverName")?.trim() ?? "";
     const submittedAt = searchParams.get("submittedAt")?.trim() ?? "";
+    const submittedAtStart = searchParams.get("submittedAtStart")?.trim() || submittedAt;
+    const submittedAtEnd = searchParams.get("submittedAtEnd")?.trim() || submittedAt;
     const { page, pageSize } = parsePagination(searchParams);
 
-    const submittedDateRange = parseSubmittedDateRange(submittedAt);
+    const submittedDateRange = parseSubmittedDateRange(submittedAtStart, submittedAtEnd);
 
     const andFilters: Prisma.UniversalImportShipmentWhereInput[] = [];
 
@@ -276,11 +293,15 @@ export async function GET(request: Request) {
     }
 
     if (submittedDateRange) {
+      const createdAt: Prisma.DateTimeFilter = {};
+      if (submittedDateRange.start) {
+        createdAt.gte = submittedDateRange.start;
+      }
+      if (submittedDateRange.end) {
+        createdAt.lt = submittedDateRange.end;
+      }
       andFilters.push({
-        createdAt: {
-          gte: submittedDateRange.start,
-          lt: submittedDateRange.end,
-        },
+        createdAt,
       });
     }
 
@@ -328,6 +349,40 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("GET /api/universal-import/shipments failed", error);
     return NextResponse.json({ error: "查询运单失败，请稍后重试。" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const unauthorizedResponse = await ensureExamModeAccess();
+
+    if (unauthorizedResponse) {
+      return unauthorizedResponse;
+    }
+
+    const body = (await request.json().catch(() => ({}))) as {
+      ids?: unknown;
+    };
+    const ids = Array.isArray(body.ids)
+      ? Array.from(new Set(body.ids.map((id) => String(id ?? "").trim()).filter(Boolean)))
+      : [];
+
+    if (ids.length === 0) {
+      return NextResponse.json({ error: "请选择要删除的历史运单。" }, { status: 400 });
+    }
+
+    const result = await prisma.universalImportShipment.deleteMany({
+      where: {
+        id: {
+          in: ids,
+        },
+      },
+    });
+
+    return NextResponse.json({ success: true, deletedCount: result.count });
+  } catch (error) {
+    console.error("DELETE /api/universal-import/shipments failed", error);
+    return NextResponse.json({ error: "批量删除历史运单失败，请稍后重试。" }, { status: 500 });
   }
 }
 
@@ -391,7 +446,7 @@ export async function POST(request: Request) {
 
     if (issues.length > 0) {
       await sendDingTalkAlert({
-        title: "万能导入 V2 提交校验失败",
+        title: "万能导入提交校验失败",
         message: `本次提交存在 ${issues.length} 个未修正问题，系统已阻止入库。`,
         tags: {
           module: "shipment-submit",
@@ -410,7 +465,7 @@ export async function POST(request: Request) {
     }
 
     const operatorName = await getOperatorNameFromSession();
-    const batchName = body.batchName?.trim() || body.originalFileName?.trim() || "智能多格式批量下单批次";
+    const batchName = body.batchName?.trim() || body.originalFileName?.trim() || "万能导入批次";
 
     const shipmentMap = new Map<string, ShipmentDraft>();
 
@@ -665,7 +720,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("POST /api/universal-import/shipments failed", error);
     await sendDingTalkAlert({
-      title: "万能导入 V2 提交异常",
+      title: "万能导入提交异常",
       message: error instanceof Error ? error.message : "提交失败，请稍后重试。",
       tags: {
         module: "shipment-submit",

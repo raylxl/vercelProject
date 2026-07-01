@@ -4,8 +4,8 @@ import { UniversalImportClient } from "./universal-import-client";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
-  title: "智能多格式批量下单系统",
-  description: "智能多格式批量下单系统，支持万能导入V2、规则管理与历史运单查询。",
+  title: "万能导入",
+  description: "万能导入，支持运单管理、规则管理与历史运单查询。",
 };
 
 type UniversalImportPageProps = {
@@ -15,7 +15,7 @@ type UniversalImportPageProps = {
 };
 
 export default async function UniversalImportPage({ searchParams }: UniversalImportPageProps) {
-  // 考试模式直接进入万能导入 V2，不再展示非考试范围模块。
+  // 当前入口直接进入万能导入，不再展示非考试范围模块。
   const operatorName = await getOperatorNameFromSession();
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const initialTab =
