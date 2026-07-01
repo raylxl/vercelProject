@@ -2700,7 +2700,7 @@ export function UniversalImportClient({
                           <option value="pdf">PDF</option>
                         </select>
                       </label>
-                      <label className="search-field">
+                      <label className="search-field rule-select-field">
                         <span>选择解析规则</span>
                         <select
                           value={selectedRuleId}
