@@ -1,0 +1,87 @@
+{
+  "timestamp": "20260706083504",
+  "baseUrl": "https://vercelproject-roan-theta.vercel.app",
+  "deploymentAlias": "https://vercelproject-roan-theta.vercel.app",
+  "checks": [
+    {
+      "name": "TC-AUTH-001 unauth universal-import redirects to login",
+      "result": "PASS",
+      "elapsedMs": 8744,
+      "httpStatus": 200,
+      "url": "https://vercelproject-roan-theta.vercel.app/",
+      "title": "万能导入"
+    },
+    {
+      "name": "TC-AUTH-002 unauth session formal mode",
+      "result": "PASS",
+      "elapsedMs": 359,
+      "httpStatus": 200,
+      "body": {
+        "authenticated": false,
+        "username": null,
+        "operatorName": "系统用户",
+        "examMode": false
+      }
+    },
+    {
+      "name": "TC-AUTH-003 unauth templates protected",
+      "result": "PASS",
+      "elapsedMs": 414,
+      "httpStatus": 401,
+      "body": {
+        "error": "请先登录后再操作万能导入。"
+      }
+    },
+    {
+      "name": "TC-AUTH-004 login admin",
+      "result": "PASS",
+      "elapsedMs": 304,
+      "httpStatus": 200,
+      "body": {
+        "authenticated": true,
+        "username": "admin",
+        "operatorName": "admin",
+        "examMode": false
+      }
+    },
+    {
+      "name": "TC-AUTH-005 auth templates allowed",
+      "result": "PASS",
+      "elapsedMs": 2059,
+      "httpStatus": 200,
+      "templateCount": 13
+    },
+    {
+      "name": "TC-RULE-001 validation positive integer quantity",
+      "result": "FAIL",
+      "elapsedMs": 2620,
+      "error": "Error: {\"httpStatus\":400,\"body\":{\"error\":\"存在未修正的错误行，无法提交。\",\"issues\":[\"第 1 行，SKU发货数量：必须为正数\"]}}\n    at [stdin]:91:72\n    at async addCheck ([stdin]:39:21)\n    at async [stdin]:87:3"
+    },
+    {
+      "name": "TC-RULE-002 validation note max length",
+      "result": "PASS",
+      "elapsedMs": 469,
+      "httpStatus": 400,
+      "body": {
+        "error": "存在未修正的错误行，无法提交。",
+        "issues": [
+          "第 1 行，备注：长度不能超过 256 个字符"
+        ]
+      }
+    },
+    {
+      "name": "TC-RULE-003 same batch suspicious duplicate external code blocked",
+      "result": "PASS",
+      "elapsedMs": 528,
+      "httpStatus": 400,
+      "body": {
+        "error": "存在未修正的错误行，无法提交。",
+        "issues": [
+          "第 1 行，外部编码：同批次外部编码重复，请拆分编码或确认同单多 SKU 信息一致",
+          "第 2 行，外部编码：同批次外部编码重复，请拆分编码或确认同单多 SKU 信息一致"
+        ]
+      }
+    }
+  ],
+  "screenshot": "D:\\codex\\Vercel\\考试提交内容\\辅助证据截图\\按用例证据\\production-key-regression-20260706083504.png"
+}
