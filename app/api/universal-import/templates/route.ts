@@ -129,31 +129,13 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "请选择要删除的规则。" }, { status: 400 });
     }
 
-    const referencedRules = await prisma.universalImportRule.findMany({
+    const referencedBatchCount = await prisma.universalImportBatch.count({
       where: {
-        id: {
+        ruleId: {
           in: ids,
         },
-        batches: {
-          some: {},
-        },
-      },
-      select: {
-        id: true,
-        ruleName: true,
       },
     });
-
-    if (referencedRules.length > 0) {
-      return NextResponse.json(
-        {
-          error: `已选规则中有 ${referencedRules.length} 条被导入批次引用，暂不允许删除。`,
-          blockedIds: referencedRules.map((rule) => rule.id),
-          blockedNames: referencedRules.map((rule) => rule.ruleName),
-        },
-        { status: 400 },
-      );
-    }
 
     const result = await prisma.universalImportRule.deleteMany({
       where: {
@@ -163,7 +145,7 @@ export async function DELETE(request: Request) {
       },
     });
 
-    return NextResponse.json({ success: true, deletedCount: result.count });
+    return NextResponse.json({ success: true, deletedCount: result.count, detachedBatchCount: referencedBatchCount });
   } catch (error) {
     console.error("DELETE /api/universal-import/templates failed", error);
     return NextResponse.json({ error: "批量删除规则失败，请稍后重试。" }, { status: 500 });

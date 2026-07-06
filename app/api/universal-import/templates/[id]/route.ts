@@ -188,22 +188,15 @@ export async function DELETE(_request: Request, context: RouteContext) {
     }
 
     const { id } = await context.params;
-    const batchCount = await prisma.universalImportBatch.count({
+    const referencedBatchCount = await prisma.universalImportBatch.count({
       where: { ruleId: id },
     });
-
-    if (batchCount > 0) {
-      return NextResponse.json(
-        { error: "该规则已被导入批次引用，暂不允许删除。" },
-        { status: 400 },
-      );
-    }
 
     await prisma.universalImportRule.delete({
       where: { id },
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, detachedBatchCount: referencedBatchCount });
   } catch (error) {
     console.error("DELETE /api/universal-import/templates/[id] failed", error);
     return NextResponse.json({ error: "删除规则失败，请稍后重试。" }, { status: 500 });

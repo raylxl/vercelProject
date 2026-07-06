@@ -371,15 +371,52 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "请选择要删除的历史运单。" }, { status: 400 });
     }
 
-    const result = await prisma.universalImportShipment.deleteMany({
-      where: {
-        id: {
-          in: ids,
+    const deleteResult = await prisma.$transaction(async (tx) => {
+      const shipments = await tx.universalImportShipment.findMany({
+        where: {
+          id: {
+            in: ids,
+          },
         },
-      },
+        select: {
+          batchId: true,
+        },
+      });
+      const batchIds = Array.from(new Set(shipments.map((shipment) => shipment.batchId)));
+
+      const shipmentResult = await tx.universalImportShipment.deleteMany({
+        where: {
+          id: {
+            in: ids,
+          },
+        },
+      });
+
+      const batchResult =
+        batchIds.length === 0
+          ? { count: 0 }
+          : await tx.universalImportBatch.deleteMany({
+              where: {
+                id: {
+                  in: batchIds,
+                },
+                shipments: {
+                  none: {},
+                },
+              },
+            });
+
+      return {
+        deletedShipmentCount: shipmentResult.count,
+        deletedBatchCount: batchResult.count,
+      };
     });
 
-    return NextResponse.json({ success: true, deletedCount: result.count });
+    return NextResponse.json({
+      success: true,
+      deletedCount: deleteResult.deletedShipmentCount,
+      deletedBatchCount: deleteResult.deletedBatchCount,
+    });
   } catch (error) {
     console.error("DELETE /api/universal-import/shipments failed", error);
     return NextResponse.json({ error: "批量删除历史运单失败，请稍后重试。" }, { status: 500 });

@@ -108,6 +108,8 @@ type RuleUpsertResponse = {
 type BatchDeleteResponse = {
   success?: boolean;
   deletedCount?: number;
+  detachedBatchCount?: number;
+  deletedBatchCount?: number;
   error?: string;
 };
 
@@ -2040,7 +2042,7 @@ export function UniversalImportClient({
       const response = await fetch(`/api/universal-import/templates/${ruleId}`, {
         method: "DELETE",
       });
-      const data = (await response.json()) as { success?: boolean; error?: string };
+      const data = (await response.json()) as { success?: boolean; detachedBatchCount?: number; error?: string };
       if (!response.ok || !data.success) {
         throw new Error(data.error ?? "删除规则失败，请稍后重试。");
       }
@@ -2050,7 +2052,12 @@ export function UniversalImportClient({
         setTemplateInfo("请先手动选择解析规则，不做自动匹配。");
         setStatus("当前选中的规则已删除，请重新选择或新建规则。");
       }
-      setRuleStatus("规则已删除。");
+      const detachedBatchCount = data.detachedBatchCount ?? 0;
+      setRuleStatus(
+        detachedBatchCount > 0
+          ? `规则已删除，并已解除 ${detachedBatchCount} 个历史导入批次的规则关联。`
+          : "规则已删除。",
+      );
       await loadRules();
     } catch (error) {
       setRuleStatus(error instanceof Error ? error.message : "删除规则失败，请稍后重试。");
@@ -2097,7 +2104,12 @@ export function UniversalImportClient({
       if (ids.includes(selectedHistoryId)) {
         setSelectedHistoryId("");
       }
-      setHistoryStatus(`已删除 ${data.deletedCount ?? ids.length} 条历史运单。`);
+      const deletedBatchCount = data.deletedBatchCount ?? 0;
+      setHistoryStatus(
+        deletedBatchCount > 0
+          ? `已删除 ${data.deletedCount ?? ids.length} 条历史运单，并同步清理 ${deletedBatchCount} 个空导入批次。`
+          : `已删除 ${data.deletedCount ?? ids.length} 条历史运单。`,
+      );
       historyCodesLoadedRef.current = false;
       await loadHistory({ ...historyFilters });
       void loadHistoryCodes();
@@ -2149,7 +2161,12 @@ export function UniversalImportClient({
         setTemplateInfo("请先手动选择解析规则，不做自动匹配。");
         setStatus("当前选中的规则已删除，请重新选择或新建规则。");
       }
-      setRuleStatus(`已删除 ${data.deletedCount ?? ids.length} 条规则。`);
+      const detachedBatchCount = data.detachedBatchCount ?? 0;
+      setRuleStatus(
+        detachedBatchCount > 0
+          ? `已删除 ${data.deletedCount ?? ids.length} 条规则，并已解除 ${detachedBatchCount} 个历史导入批次的规则关联。`
+          : `已删除 ${data.deletedCount ?? ids.length} 条规则。`,
+      );
       await loadRules();
     } catch (error) {
       setRuleStatus(error instanceof Error ? error.message : "批量删除规则失败，请稍后重试。");
