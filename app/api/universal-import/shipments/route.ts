@@ -53,7 +53,8 @@ function normalizeAutoCodeToken(value: string) {
     .normalize("NFKC")
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 18);
+    .slice(0, 18)
+    .replace(/^-+|-+$/g, "");
 }
 
 function buildAutoExternalCode(batchName: string, row: UniversalImportRow, index: number, token: string) {
