@@ -113,6 +113,14 @@ type BatchDeleteResponse = {
   error?: string;
 };
 
+function isNetworkFetchError(error: unknown) {
+  return error instanceof TypeError && /fetch|network|load failed|failed to fetch/i.test(error.message);
+}
+
+function getFriendlyNetworkError(action: string) {
+  return `${action}时网络连接异常，请检查网络连接后重试。`;
+}
+
 type DeleteConfirmTarget =
   | {
       type: "history-batch";
@@ -1349,7 +1357,7 @@ export function UniversalImportClient({
 
   function handleDefaultValueChange(field: UniversalImportField, value: string) {
     setRuleDsl((current) => updateRuleDefaultValue(current, field, value));
-    setRuleStatus(value.trim() ? "默认值已更新，试解析时会补齐空字段。" : "默认值已清空。");
+    setRuleStatus(value.trim() ? "默认值已更新，试解析时会覆盖该字段输出。" : "默认值已清空。");
   }
 
   function handleTransformConfigDraftChange(transformType: RuleTransformType, value: string) {
@@ -1831,7 +1839,11 @@ export function UniversalImportClient({
       });
       setParseProgress({ active: true, value: 100, label: "解析完成", processed: data.rowCount ?? 0, total: data.rowCount ?? 0 });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "解析失败，请稍后重试。";
+      const message = isNetworkFetchError(error)
+        ? getFriendlyNetworkError("试解析")
+        : error instanceof Error
+          ? error.message
+          : "解析失败，请稍后重试。";
       setStatus(message);
       setParseFailure({
         message,
@@ -1909,8 +1921,8 @@ export function UniversalImportClient({
       setAiProviderLabel("");
       setAiModelLabel("");
       setAiSummary(
-        error instanceof TypeError && /fetch/i.test(error.message)
-          ? "AI 规则建议请求未能连接到服务器，请检查网络、文件大小或稍后重试。"
+        isNetworkFetchError(error)
+          ? getFriendlyNetworkError("生成 AI 规则建议")
           : error instanceof Error
             ? error.message
             : "AI 规则建议生成失败，请稍后重试。",
@@ -2114,7 +2126,13 @@ export function UniversalImportClient({
       await loadHistory({ ...historyFilters });
       void loadHistoryCodes();
     } catch (error) {
-      setHistoryStatus(error instanceof Error ? error.message : "批量删除历史运单失败，请稍后重试。");
+      setHistoryStatus(
+        isNetworkFetchError(error)
+          ? getFriendlyNetworkError("删除历史运单")
+          : error instanceof Error
+            ? error.message
+            : "批量删除历史运单失败，请稍后重试。",
+      );
     } finally {
       setHistoryDeleting(false);
     }
@@ -2169,7 +2187,13 @@ export function UniversalImportClient({
       );
       await loadRules();
     } catch (error) {
-      setRuleStatus(error instanceof Error ? error.message : "批量删除规则失败，请稍后重试。");
+      setRuleStatus(
+        isNetworkFetchError(error)
+          ? getFriendlyNetworkError("删除规则")
+          : error instanceof Error
+            ? error.message
+            : "批量删除规则失败，请稍后重试。",
+      );
     } finally {
       setRuleDeleting(false);
     }
@@ -2299,10 +2323,28 @@ export function UniversalImportClient({
 
   function showMorePreviewRows() {
     setPreviewRenderLimit((current) => Math.min(current + PREVIEW_RENDER_BATCH_SIZE, draftRows.length));
+    setPerformanceSnapshot((current) =>
+      current
+        ? {
+            ...current,
+            renderedRows: Math.min(previewRenderLimit + PREVIEW_RENDER_BATCH_SIZE, draftRows.length),
+          }
+        : current,
+    );
   }
 
   function showAllPreviewRows() {
     setPreviewRenderLimit(draftRows.length);
+    setPerformanceSnapshot((current) =>
+      current
+        ? {
+            ...current,
+            renderedRows: draftRows.length,
+            renderMode: "full",
+          }
+        : current,
+    );
+    setStatus(`已显示全部 ${draftRows.length} 行预览数据。`);
   }
 
   function exportPreview() {
@@ -2417,7 +2459,11 @@ export function UniversalImportClient({
       void loadHistory({ ...historyFilters, page: 1 });
       void loadHistoryCodes();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "提交导入失败，请稍后重试。";
+      const message = isNetworkFetchError(error)
+        ? getFriendlyNetworkError("提交导入")
+        : error instanceof Error
+          ? error.message
+          : "提交导入失败，请稍后重试。";
       setStatus(message);
       pushToast(message, "error");
     } finally {
@@ -2901,10 +2947,10 @@ export function UniversalImportClient({
                                 className="mapping-default-input"
                                 value={defaultValue}
                                 onChange={(event) => handleDefaultValueChange(field.key, event.target.value)}
-                                placeholder="默认值：文件无此字段时补齐"
+                                placeholder="默认值：试解析时覆盖该字段"
                               />
                               <small className="mapping-hint">
-                                {aiStatus.detail}；下拉用于选择表格列/尾部信息，默认值会补齐空字段。
+                                {aiStatus.detail}；下拉用于选择表格列/尾部信息，默认值会覆盖该字段输出。
                               </small>
                             </label>
                           );
@@ -3716,10 +3762,10 @@ export function UniversalImportClient({
                                   className="mapping-default-input"
                                   value={defaultValue}
                                   onChange={(event) => handleDefaultValueChange(field.key, event.target.value)}
-                                  placeholder="默认值：文件无此字段时补齐"
+                                  placeholder="默认值：试解析时覆盖该字段"
                                 />
                                 <small className="mapping-hint">
-                                  {aiStatus.detail}；下拉用于选择表格列/尾部信息，默认值会补齐空字段。
+                                  {aiStatus.detail}；下拉用于选择表格列/尾部信息，默认值会覆盖该字段输出。
                                 </small>
                               </label>
                             );

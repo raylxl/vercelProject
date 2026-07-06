@@ -9,13 +9,9 @@ import {
 } from "@/lib/universal-import-engine";
 import { getOperatorNameFromSession } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
+import { ensureUniversalImportAccess } from "@/lib/universal-import-access";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
-
-async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，规则维护 API 直接开放使用。
-  return null;
-}
 
 function buildSampleMeta(headers: unknown[]) {
   return {
@@ -38,7 +34,7 @@ type RouteContext = {
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }
@@ -68,7 +64,7 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function PUT(request: Request, context: RouteContext) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }
@@ -133,7 +129,7 @@ export async function PUT(request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }
@@ -182,7 +178,7 @@ export async function POST(request: Request, context: RouteContext) {
 
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }

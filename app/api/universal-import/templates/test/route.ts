@@ -12,12 +12,8 @@ import {
 } from "@/lib/universal-import-engine";
 import { resolveImportFileType } from "@/lib/universal-import-file-type";
 import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
+import { ensureUniversalImportAccess } from "@/lib/universal-import-access";
 import { NextResponse } from "next/server";
-
-async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，试解析 API 直接开放使用。
-  return null;
-}
 
 function parseJsonField<T>(rawValue: string, fieldName: string) {
   try {
@@ -29,7 +25,7 @@ function parseJsonField<T>(rawValue: string, fieldName: string) {
 
 export async function POST(request: Request) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }
@@ -55,7 +51,22 @@ export async function POST(request: Request) {
       fileBuffer,
       fileType,
       originalFileName: file.name,
+    }).catch((parseError) => {
+      console.error("Rule test parse document failed", parseError);
+      return null;
     });
+
+    if (!document) {
+      return NextResponse.json(
+        {
+          error:
+            fileType === "word"
+              ? "Word 文件内容暂无法读取，请确认文件未损坏，或先转为 Excel/PDF 后重试。"
+              : "文件内容暂无法读取，请确认文件未损坏后重试。",
+        },
+        { status: 422 },
+      );
+    }
 
     const inferredMapping = inferMappingFromHeaders(document.headers);
     const mapping = mappingRaw

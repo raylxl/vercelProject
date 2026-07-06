@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { getOperatorNameFromSession } from "@/lib/operator-session";
+import { redirect } from "next/navigation";
+import { getOperatorNameFromSession, isAuthenticated, isExamModeEnabled } from "@/lib/operator-session";
 import { UniversalImportClient } from "./universal-import-client";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,10 @@ type UniversalImportPageProps = {
 };
 
 export default async function UniversalImportPage({ searchParams }: UniversalImportPageProps) {
-  // 当前入口直接进入万能导入，不再展示非考试范围模块。
+  if (!isExamModeEnabled() && !(await isAuthenticated())) {
+    redirect("/");
+  }
+
   const operatorName = await getOperatorNameFromSession();
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const initialTab =

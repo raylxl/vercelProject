@@ -1589,7 +1589,7 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
       configuredDefaults.forEach((field) => {
         const rawValue = normalizeCell(rule.defaults?.[field]);
         const value = field === "skuQuantity" ? normalizeNumericImportValue(rawValue) : rawValue;
-        if (value && !normalizeCell(row[field])) {
+        if (value) {
           row[field] = value;
         }
       });

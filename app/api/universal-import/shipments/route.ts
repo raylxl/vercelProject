@@ -6,6 +6,7 @@ import {
 import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
 import { getOperatorNameFromSession } from "@/lib/operator-session";
 import { prisma } from "@/lib/prisma";
+import { ensureUniversalImportAccess } from "@/lib/universal-import-access";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
@@ -61,11 +62,6 @@ function buildAutoExternalCode(batchName: string, row: UniversalImportRow, index
   const batchToken = normalizeAutoCodeToken(batchName) || "BATCH";
   const rowNumber = row.rowIndex || index + 1;
   return `AUTO-${batchToken}-${token}-${rowNumber}`.slice(0, 64);
-}
-
-async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，万能导入 API 直接开放使用。
-  return null;
 }
 
 function parsePagination(searchParams: URLSearchParams) {
@@ -195,7 +191,7 @@ function buildReceiverLabel(shipment: ShipmentDraft) {
 
 export async function GET(request: Request) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
 
     if (unauthorizedResponse) {
       return unauthorizedResponse;
@@ -369,7 +365,7 @@ export async function GET(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
 
     if (unauthorizedResponse) {
       return unauthorizedResponse;
@@ -440,7 +436,7 @@ export async function DELETE(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
 
     if (unauthorizedResponse) {
       return unauthorizedResponse;
@@ -475,9 +471,12 @@ export async function POST(request: Request) {
         ? []
         : await prisma.universalImportShipment.findMany({
             where: {
-              externalCode: {
-                in: importExternalCodes,
-              },
+              OR: importExternalCodes.map((externalCode) => ({
+                externalCode: {
+                  equals: externalCode,
+                  mode: "insensitive",
+                },
+              })),
             },
             select: {
               externalCode: true,

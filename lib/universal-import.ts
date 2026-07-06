@@ -234,6 +234,15 @@ function isPositiveNumber(value: string) {
   return Number.parseFloat(normalized) > 0;
 }
 
+function isPositiveInteger(value: string) {
+  const normalized = normalizeNumericImportValue(value);
+  if (!/^\d+$/.test(normalized)) {
+    return false;
+  }
+
+  return Number.parseInt(normalized, 10) > 0;
+}
+
 function normalizeExternalCode(value: string) {
   return value.trim().toLowerCase();
 }
@@ -281,6 +290,7 @@ export function validateImportRows(
 ) {
   const issues: UniversalImportIssue[] = [];
   const existingLookup = normalizeExistingExternalCodes(existingExternalCodes);
+  const sameBatchRows = new Map<string, UniversalImportRow[]>();
 
   rows.forEach((row, index) => {
     const rowNumber = index + 1;
@@ -329,8 +339,52 @@ export function validateImportRows(
       issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必填项缺失" });
     } else if (!isPositiveNumber(row.skuQuantity.trim())) {
       issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必须为正数" });
+    } else if (!isPositiveInteger(row.skuQuantity.trim())) {
+      issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必须为正整数" });
     }
 
+    if (row.note.trim().length > 256) {
+      issues.push({ rowIndex: rowNumber, field: "note", message: "长度不能超过 256 个字符" });
+    }
+
+    if (externalCode) {
+      const normalized = normalizeExternalCode(externalCode);
+      const current = sameBatchRows.get(normalized) ?? [];
+      current.push(row);
+      sameBatchRows.set(normalized, current);
+    }
+
+  });
+
+  sameBatchRows.forEach((duplicateRows) => {
+    if (duplicateRows.length <= 1) {
+      return;
+    }
+
+    const receiverKeys = new Set(
+      duplicateRows.map((row) =>
+        [
+          row.receiverStore.trim(),
+          row.receiverName.trim(),
+          row.receiverPhone.trim(),
+          row.receiverAddress.trim(),
+        ].join("\u001f"),
+      ),
+    );
+    const skuKeys = duplicateRows.map((row) => [row.skuCode.trim().toLowerCase(), row.skuName.trim()].join("\u001f"));
+    const hasDuplicateSku = new Set(skuKeys).size !== skuKeys.length;
+
+    if (receiverKeys.size <= 1 && !hasDuplicateSku) {
+      return;
+    }
+
+    duplicateRows.forEach((row) => {
+      issues.push({
+        rowIndex: rows.indexOf(row) + 1,
+        field: "externalCode",
+        message: "同批次外部编码重复，请拆分编码或确认同单多 SKU 信息一致",
+      });
+    });
   });
 
   const issuesByRow = new Map<number, UniversalImportIssue[]>();

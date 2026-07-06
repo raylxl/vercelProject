@@ -1007,8 +1007,8 @@ code {
 }
 
 .data-table {
-  width: 100%;
-  min-width: 1260px;
+  width: max-content;
+  min-width: max(100%, 1260px);
   border-collapse: collapse;
   background: #fff;
 }
@@ -1047,6 +1047,54 @@ code {
 .empty-row {
   padding: 30px 12px !important;
   color: var(--muted);
+}
+
+.formal-login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(20, 196, 207, 0.18), transparent 32%),
+    linear-gradient(135deg, #f7fbfd 0%, #e9f4f7 48%, #f8efe2 100%);
+}
+
+.formal-login-card {
+  width: min(100%, 520px);
+  display: grid;
+  gap: 16px;
+  padding: 30px;
+  border: 1px solid rgba(45, 81, 98, 0.12);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 24px 80px rgba(30, 63, 76, 0.16);
+}
+
+.formal-login-card h1 {
+  margin: 0;
+  color: var(--text);
+}
+
+.formal-login-copy,
+.status-line {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.formal-login-card label {
+  display: grid;
+  gap: 8px;
+  color: #31566a;
+  font-weight: 800;
+}
+
+.formal-login-card input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #d9e8f1;
+  border-radius: 12px;
+  background: #fff;
 }
 
 .pagination-bar {
@@ -2082,7 +2130,18 @@ code {
 
 .import-table,
 .history-table {
+  width: max-content;
   min-width: 1280px;
+}
+
+.shipment-preview-shell {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.shipment-preview-table {
+  width: max-content;
+  min-width: 1760px;
 }
 
 .import-table thead th,

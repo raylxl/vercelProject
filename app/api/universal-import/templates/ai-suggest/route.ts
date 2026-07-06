@@ -18,6 +18,7 @@ import {
   isLlmConfigured,
 } from "@/lib/siliconflow";
 import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
+import { ensureUniversalImportAccess } from "@/lib/universal-import-access";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -134,11 +135,6 @@ const RESPONSE_SCHEMA = {
   },
   required: ["summary", "mode", "mapping", "enabledTransforms", "transformConfigs", "confidenceReport", "riskNotes"],
 } as const;
-
-async function ensureExamModeAccess() {
-  // 考试模式不包含登录模块，AI 规则建议 API 直接开放使用。
-  return null;
-}
 
 function normalizeHeaderText(value: unknown) {
   return String(value ?? "")
@@ -1192,7 +1188,7 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
 
 export async function POST(request: Request) {
   try {
-    const unauthorizedResponse = await ensureExamModeAccess();
+    const unauthorizedResponse = await ensureUniversalImportAccess();
     if (unauthorizedResponse) {
       return unauthorizedResponse;
     }
@@ -1216,7 +1212,22 @@ export async function POST(request: Request) {
       fileBuffer,
       fileType,
       originalFileName: file.name,
+    }).catch((parseError) => {
+      console.error("AI suggest parse document failed", parseError);
+      return null;
     });
+
+    if (!document) {
+      return NextResponse.json(
+        {
+          error:
+            fileType === "word"
+              ? "Word 文件内容暂无法读取，请确认文件未损坏，或先转为 Excel/PDF 后重试。"
+              : "文件内容暂无法读取，请确认文件未损坏后重试。",
+        },
+        { status: 422 },
+      );
+    }
 
     const inferredMapping = inferMappingFromHeaders(document.headers);
 
