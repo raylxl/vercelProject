@@ -48,6 +48,20 @@ type PreparedShipmentDraft = ShipmentDraft & {
   receiverGroups: Array<ReceiverGroupDraft & { id: string }>;
 };
 
+function normalizeAutoCodeToken(value: string) {
+  return value
+    .normalize("NFKC")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 18);
+}
+
+function buildAutoExternalCode(batchName: string, row: UniversalImportRow, index: number, token: string) {
+  const batchToken = normalizeAutoCodeToken(batchName) || "BATCH";
+  const rowNumber = row.rowIndex || index + 1;
+  return `AUTO-${batchToken}-${token}-${rowNumber}`.slice(0, 64);
+}
+
 async function ensureExamModeAccess() {
   // 考试模式不包含登录模块，万能导入 API 直接开放使用。
   return null;
@@ -444,6 +458,8 @@ export async function POST(request: Request) {
     };
 
     const rows = body.rows ?? [];
+    const operatorName = await getOperatorNameFromSession();
+    const batchName = body.batchName?.trim() || body.originalFileName?.trim() || "万能导入批次";
 
     const importExternalCodes = Array.from(
       new Set(
@@ -501,12 +517,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const operatorName = await getOperatorNameFromSession();
-    const batchName = body.batchName?.trim() || body.originalFileName?.trim() || "万能导入批次";
+    const autoExternalCodeToken = Date.now().toString(36);
+    const rowsForSubmit = rows.map((row, index) => ({
+      ...row,
+      externalCode: row.externalCode.trim() || buildAutoExternalCode(batchName, row, index, autoExternalCodeToken),
+    }));
 
     const shipmentMap = new Map<string, ShipmentDraft>();
 
-    rows.forEach((row) => {
+    rowsForSubmit.forEach((row) => {
       const externalCode = row.externalCode.trim();
       const current = shipmentMap.get(externalCode);
 
