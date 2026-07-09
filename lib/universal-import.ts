@@ -54,6 +54,24 @@ export const UNIVERSAL_IMPORT_FIELDS = [
     aliases: ["SKU规格型号", "规格型号", "规格", "型号", "spec", "skuspec"],
   },
   {
+    key: "weight",
+    label: "重量",
+    required: false,
+    aliases: ["重量", "商品重量", "发货重量", "总重量", "毛重", "净重", "weight"],
+  },
+  {
+    key: "pieces",
+    label: "件数",
+    required: false,
+    aliases: ["总件数", "运单件数", "包裹件数", "包装件数", "箱数", "包数", "pieces"],
+  },
+  {
+    key: "temperature",
+    label: "温层",
+    required: false,
+    aliases: ["温层", "温区", "温度层", "配送温层", "temperature"],
+  },
+  {
     key: "note",
     label: "备注",
     required: false,
@@ -86,6 +104,8 @@ export const UNIVERSAL_IMPORT_FIELD_LABELS = Object.fromEntries(
   UNIVERSAL_IMPORT_FIELDS.map((field) => [field.key, field.label]),
 ) as Record<UniversalImportField, string>;
 
+export const UNIVERSAL_IMPORT_TEMPERATURE_OPTIONS = ["常温", "冷藏", "冷冻"] as const;
+
 function normalizeText(value: unknown) {
   return String(value ?? "")
     .normalize("NFKC")
@@ -103,8 +123,51 @@ function isInventoryMetricQuantityHeader(value: string) {
   return /(库存|在库|可用|结余|冻结|分配|待移入|下单后)/.test(value);
 }
 
+function isShipmentPiecesHeader(value: string) {
+  return /(总件数|运单件数|包裹件数|包装件数|箱数|包数)/.test(value);
+}
+
 function isContactPhoneHeader(value: string) {
   return /(电话|手机|手机号|联系方式|联系电话|号码)/.test(value);
+}
+
+export function scoreImportHeaderRow(row: string[]) {
+  const populatedCells = row.map((cell) => String(cell ?? "").trim()).filter(Boolean);
+  if (populatedCells.length === 0) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const normalizedCells = populatedCells.map((cell) => normalizeText(cell)).filter(Boolean);
+  const aliasMatches = UNIVERSAL_IMPORT_FIELDS.reduce((score, field) => {
+    const aliases = field.aliases.map((alias) => normalizeText(alias)).filter(Boolean);
+    const matched = normalizedCells.some((cell) =>
+      aliases.some((alias) => cell === alias || cell.includes(alias) || alias.includes(cell)),
+    );
+    return score + (matched ? 8 : 0);
+  }, 0);
+
+  const shortHeaderLikeCount = populatedCells.filter(
+    (cell) => cell.length <= 18 && !/[；。①②③④⑤⑥⑦⑧⑨⑩]/.test(cell),
+  ).length;
+  const longNarrativeCount = populatedCells.filter((cell) => cell.length >= 30 || /[:：].{12,}/.test(cell)).length;
+  const singleTitlePenalty = populatedCells.length === 1 && populatedCells[0].length >= 12 ? 24 : 0;
+
+  return aliasMatches + populatedCells.length * 2 + shortHeaderLikeCount * 3 - longNarrativeCount * 12 - singleTitlePenalty;
+}
+
+export function inferBestImportHeaderRowIndex(rows: string[][], searchLimit = 16) {
+  const candidates = rows.slice(0, searchLimit);
+  if (candidates.length === 0) {
+    return 0;
+  }
+
+  return candidates.reduce(
+    (best, row, index) => {
+      const score = scoreImportHeaderRow(row);
+      return score > best.score ? { index, score } : best;
+    },
+    { index: 0, score: Number.NEGATIVE_INFINITY },
+  ).index;
 }
 
 export function buildTemplateFingerprint(sheetName: string, headerRow: unknown[]) {
@@ -132,6 +195,10 @@ export function inferMappingFromHeaders(headers: unknown[]): UniversalImportMapp
         }
 
         if (field.key === "skuQuantity" && alias === "数量" && isInventoryMetricQuantityHeader(header)) {
+          return currentScore;
+        }
+
+        if (field.key === "skuQuantity" && alias === "件数" && isShipmentPiecesHeader(header)) {
           return currentScore;
         }
 
@@ -198,6 +265,9 @@ export function createEmptyRow(rowIndex: number): UniversalImportRow {
     skuName: "",
     skuQuantity: "",
     skuSpec: "",
+    weight: "",
+    pieces: "",
+    temperature: "",
     note: "",
     rowIndex,
   };
@@ -225,6 +295,35 @@ export function normalizeNumericImportValue(value: unknown) {
   return match?.[1] ?? normalized;
 }
 
+export function normalizeTemperatureImportValue(value: unknown) {
+  const text = String(value ?? "").trim().normalize("NFKC");
+  if (!text) {
+    return "";
+  }
+
+  const compact = text.replace(/\s+/g, "").toLowerCase();
+  const matched = new Map<string, (typeof UNIVERSAL_IMPORT_TEMPERATURE_OPTIONS)[number]>([
+    ["常温", "常温"],
+    ["常温件", "常温"],
+    ["常温品", "常温"],
+    ["normal", "常温"],
+    ["ambient", "常温"],
+    ["冷藏", "冷藏"],
+    ["冷藏件", "冷藏"],
+    ["冷藏品", "冷藏"],
+    ["冷链冷藏", "冷藏"],
+    ["冷鲜", "冷藏"],
+    ["chilled", "冷藏"],
+    ["冷冻", "冷冻"],
+    ["冷冻件", "冷冻"],
+    ["冷冻品", "冷冻"],
+    ["冻品", "冷冻"],
+    ["frozen", "冷冻"],
+  ]).get(compact);
+
+  return matched ?? text;
+}
+
 function isPositiveNumber(value: string) {
   const normalized = normalizeNumericImportValue(value);
   if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
@@ -241,6 +340,12 @@ function isPositiveInteger(value: string) {
   }
 
   return Number.parseInt(normalized, 10) > 0;
+}
+
+function isSupportedTemperature(value: string) {
+  return UNIVERSAL_IMPORT_TEMPERATURE_OPTIONS.includes(
+    normalizeTemperatureImportValue(value) as (typeof UNIVERSAL_IMPORT_TEMPERATURE_OPTIONS)[number],
+  );
 }
 
 function normalizeExternalCode(value: string) {
@@ -290,7 +395,6 @@ export function validateImportRows(
 ) {
   const issues: UniversalImportIssue[] = [];
   const existingLookup = normalizeExistingExternalCodes(existingExternalCodes);
-  const sameBatchRows = new Map<string, UniversalImportRow[]>();
 
   rows.forEach((row, index) => {
     const rowNumber = index + 1;
@@ -343,48 +447,26 @@ export function validateImportRows(
       issues.push({ rowIndex: rowNumber, field: "skuQuantity", message: "必须为正整数" });
     }
 
+    if (row.weight.trim() && !isPositiveNumber(row.weight.trim())) {
+      issues.push({ rowIndex: rowNumber, field: "weight", message: "必须为正数" });
+    }
+
+    if (row.pieces.trim() && !isPositiveInteger(row.pieces.trim())) {
+      issues.push({ rowIndex: rowNumber, field: "pieces", message: "必须为正整数" });
+    }
+
+    if (row.temperature.trim() && !isSupportedTemperature(row.temperature.trim())) {
+      issues.push({
+        rowIndex: rowNumber,
+        field: "temperature",
+        message: `仅支持 ${UNIVERSAL_IMPORT_TEMPERATURE_OPTIONS.join(" / ")}`,
+      });
+    }
+
     if (row.note.trim().length > 256) {
       issues.push({ rowIndex: rowNumber, field: "note", message: "长度不能超过 256 个字符" });
     }
 
-    if (externalCode) {
-      const normalized = normalizeExternalCode(externalCode);
-      const current = sameBatchRows.get(normalized) ?? [];
-      current.push(row);
-      sameBatchRows.set(normalized, current);
-    }
-
-  });
-
-  sameBatchRows.forEach((duplicateRows) => {
-    if (duplicateRows.length <= 1) {
-      return;
-    }
-
-    const receiverKeys = new Set(
-      duplicateRows.map((row) =>
-        [
-          row.receiverStore.trim(),
-          row.receiverName.trim(),
-          row.receiverPhone.trim(),
-          row.receiverAddress.trim(),
-        ].join("\u001f"),
-      ),
-    );
-    const skuKeys = duplicateRows.map((row) => [row.skuCode.trim().toLowerCase(), row.skuName.trim()].join("\u001f"));
-    const hasDuplicateSku = new Set(skuKeys).size !== skuKeys.length;
-
-    if (receiverKeys.size <= 1 && !hasDuplicateSku) {
-      return;
-    }
-
-    duplicateRows.forEach((row) => {
-      issues.push({
-        rowIndex: rows.indexOf(row) + 1,
-        field: "externalCode",
-        message: "同批次外部编码重复，请拆分编码或确认同单多 SKU 信息一致",
-      });
-    });
   });
 
   const issuesByRow = new Map<number, UniversalImportIssue[]>();

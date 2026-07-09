@@ -7,12 +7,14 @@ import {
   formatIssueLabel,
   inferMappingFromHeaders,
   normalizeNumericImportValue,
+  normalizeTemperatureImportValue,
   UNIVERSAL_IMPORT_FIELDS,
   type UniversalImportField,
   type UniversalImportMapping,
   type UniversalImportRow,
   validateImportRows,
 } from "@/lib/universal-import";
+import { collectUniversalImportRiskNotes } from "@/lib/universal-import-risk";
 import { ensurePdfRuntimePolyfills } from "@/lib/pdf-runtime-polyfills";
 
 export type SupportedImportFileType = "excel" | "word" | "pdf";
@@ -64,6 +66,7 @@ export type RuleExecutionResult = {
   issueCount: number;
   rowCount: number;
   summary: string[];
+  riskNotes: string[];
 };
 
 type PdfParseTextResult = {
@@ -229,6 +232,53 @@ function splitNameAndSpec(value: string) {
   };
 }
 
+function deriveSpecFromSkuName(value: string) {
+  const normalized = value
+    .trim()
+    .replace(
+      /[\uFF08(][^\uFF09)\n\d]*(?:\u9F0E\u5DF4|\u6284\u7801|\u65B0\u54C1|\u5E38\u6E29|\u51B7\u51BB|\u51B7\u85CF|\u8D60\u54C1|\u8BD5\u5403)[^\uFF09)\n]*[\uFF09)]$/u,
+      "",
+    )
+    .trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const patterns = [
+    /^(\d+(?:\.\d+)?\s*(?:kg|g|\u514B|l|ml|L|KG|G|ML))/i,
+    /(\d+(?:\.\d+)?\s*(?:kg|g|\u514B|l|ml|L|KG|G|ML)(?:\*\d+(?:\.\d+)?(?:\u888B|\u74F6|\u76D2|\u5305|\u6876|\u4EF6|\u7BB1|\u7247|\u4E2A|\u4E32))*(?:\/(?:\u4EF6|\u7BB1|\u5305|\u6876))?)$/i,
+    /(\d+\s*(?:\u7BB1|\u5305|\u888B|\u74F6|\u76D2|\u6876)[^\uFF08\uFF09)\n\u3010\u3011]{0,24}(?:\*\d+(?:\.\d+)?(?:\u888B|\u74F6|\u76D2|\u5305|\u6876|\u4EF6|\u7BB1|\u7247|\u4E2A|\u4E32|\u514B|g|kg|ml|l|L))+)$/i,
+    /(\d+\s*(?:\u7BB1|\u5305|\u888B|\u74F6|\u76D2|\u6876)\d*(?:\u888B|\u74F6|\u76D2|\u5305|\u6876)?\*\d+(?:\.\d+)?(?:\u514B|g|kg|ml|l|L))$/i,
+    /((?:[XSML]|XXL|XXXL|\d+XL|\u5747\u7801|\u5927\u7801|\u4E2D\u7801|\u5C0F\u7801|L\u7801|XL\u7801|2XL\u7801|3XL\u7801|4XL\u7801))$/i,
+    /([\uFF08(][^\uFF09)\n]{1,24}(?:kg|g|\u514B|l|ml|KG|G|ML)[^\uFF09)\n]{0,24}[\uFF09)])$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match?.[1]) {
+      return match[1].trim();
+    }
+  }
+
+  return "";
+}
+
+function normalizeSkuSpecValue(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.replace(/\s+(?:\u4EF6|\u5305|\u7BB1|\u888B|\u74F6|\u6876|\u76D2|\u4E32|\u4E2A)$/u, "").trim();
+}
+
+function extractGlobalExternalCode(text: string) {
+  return cleanExtractedField(
+    "externalCode",
+    extractTextField(text, "(?:调拨单号|单据编号|单据号|外部编码|订单号|配送单号)[:：\\s]+([^|\\n\\r]+)"),
+  );
+}
+
 function isMetricLikeMatrixHeader(value: string) {
   return /^(?:\d+(?:\.\d+)?)$/.test(value) || /(合计|结余|库存|数量|在库|可用|冻结|分配|待移入)/.test(value);
 }
@@ -333,6 +383,21 @@ function cleanExtractedField(field: UniversalImportField, value: string) {
     return normalized.match(/(?:1\d{10}|(?:0\d{2,3}-?)?\d{7,8})/)?.[0] ?? normalized;
   }
 
+  if (field === "skuQuantity" || field === "weight" || field === "pieces") {
+    return normalizeNumericImportValue(normalized);
+  }
+
+  if (field === "temperature") {
+    return normalizeTemperatureImportValue(normalized);
+  }
+
+  if (field === "receiverStore") {
+    return normalized
+      .replace(/\s+(?:\u8BA2\u8D27\u673A\u6784|\u4E0B\u5355\u673A\u6784|\u4E0B\u5355\u95E8\u5E97)[:\uFF1A].*$/u, "")
+      .replace(/^(?:\u6536\u8D27\u673A\u6784|\u6536\u8D27\u95E8\u5E97|\u95E8\u5E97|\u95E8\u5E97\u540D\u79F0)[:\uFF1A]\s*/u, "")
+      .trim();
+  }
+
   const segments = normalized
     .split("|")
     .map((segment) => segment.trim())
@@ -369,6 +434,18 @@ function rowFromValues(values: Partial<UniversalImportRow>, rowIndex: number): U
   const normalizedValues = { ...values };
   if (normalizedValues.skuQuantity) {
     normalizedValues.skuQuantity = normalizeNumericImportValue(normalizedValues.skuQuantity);
+  }
+  if (normalizedValues.weight) {
+    normalizedValues.weight = normalizeNumericImportValue(normalizedValues.weight);
+  }
+  if (normalizedValues.pieces) {
+    normalizedValues.pieces = normalizeNumericImportValue(normalizedValues.pieces);
+  }
+  if (normalizedValues.temperature) {
+    normalizedValues.temperature = normalizeTemperatureImportValue(normalizedValues.temperature);
+  }
+  if (normalizedValues.skuSpec) {
+    normalizedValues.skuSpec = normalizeSkuSpecValue(normalizedValues.skuSpec);
   }
 
   return {
@@ -1076,6 +1153,10 @@ function parseRowsByMapping(
       }
     }
 
+    if (!normalizeCell(values.skuSpec)) {
+      values.skuSpec = deriveSpecFromSkuName(normalizeCell(values.skuName));
+    }
+
     if (!isPositiveQuantity(normalizeCell(values.skuQuantity))) {
       const quantityCandidates = sourceRow.length > 1 ? sourceRow.slice(1) : sourceRow;
       const lastPositiveQuantity = quantityCandidates.slice().reverse().find((cell) => isPositiveQuantity(cell));
@@ -1166,6 +1247,7 @@ function parseMatrixWithHeader(
               interpolate(config.externalCodeTemplate, { receiverStore, columnIndex: String(columnIndex) }) ||
               `MATRIX-${toExternalCodePart(receiverStore)}`,
             receiverStore,
+            skuSpec: normalizeCell(baseValues.skuSpec) || deriveSpecFromSkuName(normalizeCell(baseValues.skuName)),
             skuQuantity: quantity,
           },
           rowOffset + output.length + 1,
@@ -1344,6 +1426,8 @@ function parseCards(section: ParsedDocument["sections"][number], config: CardSpl
     return [];
   }
 
+  const sectionExternalCode = extractGlobalExternalCode(section.text);
+
   const cards: string[][][] = [];
   let current: string[][] = [];
   section.rows.forEach((row) => {
@@ -1370,10 +1454,19 @@ function parseCards(section: ParsedDocument["sections"][number], config: CardSpl
       cardIndex: cardIndex + 1,
     });
     const baseValues: Partial<Record<UniversalImportField, string>> = {
-      externalCode: interpolate(config.externalCodeTemplate, cardContext) || ensureUniqueExternalCode("CARD", cardIndex),
+      externalCode:
+        sectionExternalCode ||
+        interpolate(config.externalCodeTemplate, cardContext) ||
+        ensureUniqueExternalCode("CARD", cardIndex),
     };
 
     Object.assign(baseValues, extractFieldsByRegex(text, config.fieldRegex));
+    if (isWeakExtractedFieldValue("externalCode", baseValues.externalCode)) {
+      const globalExternalCode = extractGlobalExternalCode(text) || sectionExternalCode;
+      if (globalExternalCode) {
+        baseValues.externalCode = globalExternalCode;
+      }
+    }
     extractFieldsByKeyValueLabels(card, config.keyValueLabels, baseValues);
     extractAdjacentKeyValueFields(
       {
@@ -1415,7 +1508,7 @@ function parseCards(section: ParsedDocument["sections"][number], config: CardSpl
             ...baseValues,
             skuCode,
             skuName,
-            skuSpec: getColumnValue(itemRow, itemColumns.skuSpec),
+            skuSpec: getColumnValue(itemRow, itemColumns.skuSpec) || deriveSpecFromSkuName(skuName),
             skuQuantity: quantity,
           },
           rowOffset + output.length + 1,
@@ -1588,7 +1681,12 @@ function executeConfiguredRule(document: ParsedDocument, rawRule: UniversalImpor
     rows.forEach((row) => {
       configuredDefaults.forEach((field) => {
         const rawValue = normalizeCell(rule.defaults?.[field]);
-        const value = field === "skuQuantity" ? normalizeNumericImportValue(rawValue) : rawValue;
+        const value =
+          field === "skuQuantity" || field === "weight" || field === "pieces"
+            ? normalizeNumericImportValue(rawValue)
+            : field === "temperature"
+              ? normalizeTemperatureImportValue(rawValue)
+              : rawValue;
         if (value) {
           row[field] = value;
         }
@@ -1655,5 +1753,6 @@ export async function executeUniversalImportRule(options: {
     issueCount: validation.issues.length,
     rowCount: rows.length,
     summary,
+    riskNotes: collectUniversalImportRiskNotes(rows),
   } satisfies RuleExecutionResult;
 }

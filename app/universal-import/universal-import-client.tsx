@@ -56,6 +56,9 @@ type ShipmentHistoryRecord = {
     skuName: string;
     skuQuantity: number;
     skuSpec: string | null;
+    weight?: number | null;
+    pieces?: number | null;
+    temperature?: string | null;
   }>;
   batch: {
     batchName: string;
@@ -141,6 +144,7 @@ type RuleTestResponse = {
   issueCount?: number;
   rowCount?: number;
   summary?: string[];
+  riskNotes?: string[];
   fingerprint?: string;
   inferredMapping?: UniversalImportMapping;
   document?: {
@@ -218,12 +222,16 @@ type SidebarMenuItem = {
   children?: SidebarMenuItem[];
 };
 
+type ProgressStatus = "idle" | "active" | "success" | "warning" | "error";
+
 type ProgressState = {
   active: boolean;
+  status: ProgressStatus;
   value: number;
   label: string;
   processed: number;
   total: number;
+  updatedAt: string;
 };
 
 function getProcessedCountFromProgress(value: number, total: number) {
@@ -244,11 +252,16 @@ type ParseFailureState = {
 };
 
 type PerformanceSnapshot = {
-  parseMs: number;
+  fileName: string;
+  fileSize: number;
+  e2eMs: number;
   totalRows: number;
   renderedRows: number;
+  hiddenRows: number;
   issueCount: number;
   renderMode: "full" | "batched";
+  measuredAt: string;
+  browserLabel: string;
 };
 
 type SubmitSummary = {
@@ -257,6 +270,11 @@ type SubmitSummary = {
   shipmentCount: number;
   failedShipmentCount: number;
   submittedAt: string;
+  durationMs: number;
+  batchName: string;
+  fileName: string;
+  ruleName: string;
+  status: "success" | "partial";
   failedResults: SubmitResult[];
   blockingIssues: string[];
 };
@@ -269,6 +287,14 @@ type SubmitResult = {
   shipmentId?: string;
   rowIndexes: number[];
   error?: string;
+};
+
+type ActivityItem = {
+  id: string;
+  title: string;
+  detail: string;
+  tone: ToastTone;
+  timestamp: string;
 };
 
 async function readJsonResponse<T>(response: Response): Promise<T & { error?: string }> {
@@ -292,6 +318,79 @@ async function readJsonResponse<T>(response: Response): Promise<T & { error?: st
       error: `接口响应 JSON 解析失败（HTTP ${response.status}）。`,
     } as T & { error?: string };
   }
+}
+
+function createIdleProgressState(): ProgressState {
+  return {
+    active: false,
+    status: "idle",
+    value: 0,
+    label: "",
+    processed: 0,
+    total: 0,
+    updatedAt: "",
+  };
+}
+
+function createProgressState(
+  status: ProgressStatus,
+  value: number,
+  label: string,
+  processed: number,
+  total: number,
+  active = status === "active",
+): ProgressState {
+  return {
+    active,
+    status,
+    value,
+    label,
+    processed,
+    total,
+    updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+  };
+}
+
+function formatProgressHeadline(progress: ProgressState) {
+  if (progress.total > 0) {
+    return `${progress.value}% · ${progress.processed}/${progress.total}`;
+  }
+
+  if (progress.label) {
+    return progress.value > 0 ? `${progress.value}%` : "已记录";
+  }
+
+  return "待处理";
+}
+
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function getBrowserLabel() {
+  if (typeof window === "undefined") {
+    return "Unknown";
+  }
+
+  const userAgent = window.navigator.userAgent;
+  if (/Edg\//i.test(userAgent)) {
+    return "Edge";
+  }
+  if (/Chrome\//i.test(userAgent)) {
+    return "Chrome";
+  }
+  if (/Safari\//i.test(userAgent) && !/Chrome\//i.test(userAgent)) {
+    return "Safari";
+  }
+  if (/Firefox\//i.test(userAgent)) {
+    return "Firefox";
+  }
+
+  return "Unknown";
 }
 
 type AggregatedPreviewShipment = {
@@ -379,6 +478,9 @@ function createEmptyDraftRow(rowIndex: number): DraftRow {
     skuName: "",
     skuQuantity: "",
     skuSpec: "",
+    weight: "",
+    pieces: "",
+    temperature: "",
     note: "",
     rowIndex,
     id: createRowId(),
@@ -1154,20 +1256,8 @@ export function UniversalImportClient({
   const [ruleDsl, setRuleDsl] = useState<UniversalImportRuleDsl>(buildDefaultRuleDsl(DEFAULT_MAPPING, "excel"));
   const [status, setStatus] = useState("");
   const [historyStatus, setHistoryStatus] = useState("");
-  const [parseProgress, setParseProgress] = useState<ProgressState>({
-    active: false,
-    value: 0,
-    label: "",
-    processed: 0,
-    total: 0,
-  });
-  const [submitProgress, setSubmitProgress] = useState<ProgressState>({
-    active: false,
-    value: 0,
-    label: "",
-    processed: 0,
-    total: 0,
-  });
+  const [parseProgress, setParseProgress] = useState<ProgressState>(createIdleProgressState);
+  const [submitProgress, setSubmitProgress] = useState<ProgressState>(createIdleProgressState);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1190,6 +1280,7 @@ export function UniversalImportClient({
   const [selectedRuleId, setSelectedRuleId] = useState("");
   const [selectedRuleIds, setSelectedRuleIds] = useState<string[]>([]);
   const [ruleTestSummary, setRuleTestSummary] = useState("");
+  const [parseRiskNotes, setParseRiskNotes] = useState<string[]>([]);
   const [aiSummary, setAiSummary] = useState("");
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [aiRiskNotes, setAiRiskNotes] = useState<string[]>([]);
@@ -1201,6 +1292,7 @@ export function UniversalImportClient({
   const [performanceSnapshot, setPerformanceSnapshot] = useState<PerformanceSnapshot | null>(null);
   const [submitSummary, setSubmitSummary] = useState<SubmitSummary | null>(null);
   const [submitBlockingIssues, setSubmitBlockingIssues] = useState<string[]>([]);
+  const [activityFeed, setActivityFeed] = useState<ActivityItem[]>([]);
   const [transformConfigDrafts, setTransformConfigDrafts] = useState<Record<string, string>>({});
   const [expandedMenuPaths, setExpandedMenuPaths] = useState<string[]>([
     "万能导入",
@@ -1306,6 +1398,18 @@ export function UniversalImportClient({
     }, 2600);
   }
 
+  function logActivity(title: string, detail: string, tone: ToastTone = "info") {
+    const entry: ActivityItem = {
+      id: createRowId(),
+      title,
+      detail,
+      tone,
+      timestamp: new Date().toLocaleString("zh-CN", { hour12: false }),
+    };
+
+    setActivityFeed((current) => [entry, ...current].slice(0, 8));
+  }
+
   function syncRuleMapping(nextMapping: UniversalImportMapping) {
     setRuleDsl((current) => mergeRuleDslMapping(current, nextMapping));
   }
@@ -1356,7 +1460,8 @@ export function UniversalImportClient({
   }
 
   function handleDefaultValueChange(field: UniversalImportField, value: string) {
-    setRuleDsl((current) => updateRuleDefaultValue(current, field, value));
+    const nextRuleDsl = buildRuleDslFromEditor(mapping, updateRuleDefaultValue(ruleDsl, field, value));
+    setRuleDsl(nextRuleDsl);
     setRuleStatus(value.trim() ? "默认值已更新，试解析时会覆盖该字段输出。" : "默认值已清空。");
   }
 
@@ -1397,8 +1502,11 @@ export function UniversalImportClient({
     }
   }
 
-  function buildRuleDslFromEditor() {
-    const nextRuleDsl = mergeRuleDslMapping(ruleDsl, mapping);
+  function buildRuleDslFromEditor(
+    nextMapping: UniversalImportMapping = mapping,
+    nextRuleDslDraft: UniversalImportRuleDsl = ruleDsl,
+  ) {
+    const nextRuleDsl = mergeRuleDslMapping(nextRuleDslDraft, nextMapping);
     const transforms = nextRuleDsl.transforms.map((transform) => {
       const rawValue = transformConfigDrafts[transform.type];
       if (rawValue === undefined) {
@@ -1422,6 +1530,21 @@ export function UniversalImportClient({
       defaults: nextRuleDsl.defaults ?? {},
       transforms,
     };
+  }
+
+  function buildPreviewSignature(nextRuleDsl: UniversalImportRuleDsl) {
+    if (!selectedFile) {
+      return "";
+    }
+
+    return JSON.stringify({
+      fileName: selectedFile.name,
+      lastModified: selectedFile.lastModified,
+      fileType,
+      selectedRuleId,
+      mapping: nextRuleDsl.mapping,
+      ruleDsl: nextRuleDsl,
+    });
   }
 
   function registerCellRef(rowId: string, field: UniversalImportField, node: HTMLInputElement | null) {
@@ -1551,8 +1674,8 @@ export function UniversalImportClient({
     }
   }
 
-  async function loadHistoryCodes() {
-    if (historyCodesLoadedRef.current) {
+  async function loadHistoryCodes(forceRefresh = false) {
+    if (historyCodesLoadedRef.current && !forceRefresh) {
       return;
     }
     try {
@@ -1651,6 +1774,7 @@ export function UniversalImportClient({
     setTailSourceOptions({});
     setFingerprint("");
     setRuleTestSummary("");
+    setParseRiskNotes([]);
     setAiSummary("");
     setAiRiskNotes([]);
     setAiConfidenceReport([]);
@@ -1658,25 +1782,27 @@ export function UniversalImportClient({
     setAiModelLabel("");
     setParseFailure(null);
     setPerformanceSnapshot(null);
-    setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
+    setParseProgress(createIdleProgressState());
+    setSubmitProgress(createIdleProgressState());
+    setActivityFeed([]);
     lastAutoPreviewSignatureRef.current = "";
-    setParseFailure(null);
-    setPerformanceSnapshot(null);
-    setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
-    lastAutoPreviewSignatureRef.current = "";
-    setParseFailure(null);
-    lastAutoPreviewSignatureRef.current = "";
-    setParseProgress({
-      active: true,
-      value: 8,
-      label: "文件已读取，等待选择解析规则",
-      processed: getProcessedCountFromProgress(8, 100),
-      total: 100,
-    });
+    const uploadProgress = createProgressState(
+      "active",
+      8,
+      "文件已读取，等待选择解析规则",
+      getProcessedCountFromProgress(8, 100),
+      100,
+    );
+    setParseProgress(uploadProgress);
     setStatus(
       selectedRuleId
         ? "文件已上传，请点击“试解析选中规则”。"
         : "文件已上传，请先在“选择解析规则”中手动选择一条规则。",
+    );
+    logActivity(
+      "文件上传完成",
+      `${file.name} · ${formatFileSize(file.size)} · ${formatFileTypeLabel(detectedFileType)}，等待规则确认后试解析。`,
+      "info",
     );
     if (incompatibleRuleSelected) {
       setSelectedRuleId("");
@@ -1689,7 +1815,7 @@ export function UniversalImportClient({
       pushToast("已清空不兼容的规则，请重新选择对应文件类型的解析规则。", "info");
     }
     window.setTimeout(() => {
-      setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
+      setParseProgress(createIdleProgressState());
     }, 900);
   }
 
@@ -1702,6 +1828,7 @@ export function UniversalImportClient({
       setTailSourceOptions({});
       setAiProviderLabel("");
       setAiModelLabel("");
+      setParseRiskNotes([]);
       setTemplateInfo("请先手动选择解析规则，不做自动匹配。");
       setStatus("已清空解析规则选择，试解析和提交前必须重新选择规则。");
       return;
@@ -1716,7 +1843,26 @@ export function UniversalImportClient({
       setSelectedIds([]);
       setFingerprint("");
       setRuleTestSummary("");
+      setParseRiskNotes([]);
     }
+  }
+
+  function beginNewRuleDraft() {
+    setSelectedRuleId("");
+    setRuleNameInput(selectedFile ? `${selectedFile.name.replace(/\.[^.]+$/, "")} 规则` : "");
+    setMapping(DEFAULT_MAPPING);
+    setRuleDsl(buildDefaultRuleDsl(DEFAULT_MAPPING, fileType));
+    setTransformConfigDrafts({});
+    setAiRiskNotes([]);
+    setAiConfidenceReport([]);
+    setParseRiskNotes([]);
+    setTailSourceOptions({});
+    setAiProviderLabel("");
+    setAiModelLabel("");
+    setTemplateInfo("已创建空白规则草稿，请继续配置字段映射或生成 AI 建议。");
+    setRuleStatus("空白规则草稿已准备，可直接编辑规则配置，或回到导入区先生成 AI 建议。");
+    setStatus("已进入规则管理，可开始新建规则。");
+    setActiveTab("rules");
   }
 
   function handleFileTypeChange(nextFileType: SupportedImportFileType) {
@@ -1733,6 +1879,7 @@ export function UniversalImportClient({
     setTailSourceOptions({});
     setFingerprint("");
     setRuleTestSummary("");
+    setParseRiskNotes([]);
     setMapping(DEFAULT_MAPPING);
     setRuleDsl(buildDefaultRuleDsl(DEFAULT_MAPPING, nextFileType));
     setTransformConfigDrafts({});
@@ -1776,24 +1923,30 @@ export function UniversalImportClient({
     setPerformanceSnapshot(null);
     setSubmitSummary(null);
     setSubmitBlockingIssues([]);
-    setParseProgress({
-      active: true,
-      value: 15,
-      label: "正在上传文件并读取结构...",
-      processed: getProcessedCountFromProgress(15, 100),
-      total: 100,
-    });
+    setParseRiskNotes([]);
+    setParseProgress(
+      createProgressState(
+        "active",
+        15,
+        "正在上传文件并读取结构...",
+        getProcessedCountFromProgress(15, 100),
+        100,
+      ),
+    );
+    logActivity("开始试解析", `${file.name} 已进入解析流程，系统正在读取文件结构。`, "info");
 
     try {
       const effectiveMapping = nextMapping ?? mapping;
       const effectiveRuleDsl = nextRuleDsl ?? ruleDsl;
-      setParseProgress({
-        active: true,
-        value: 38,
-        label: "正在按当前规则执行解析...",
-        processed: getProcessedCountFromProgress(38, 100),
-        total: 100,
-      });
+      setParseProgress(
+        createProgressState(
+          "active",
+          38,
+          "正在按当前规则执行解析...",
+          getProcessedCountFromProgress(38, 100),
+          100,
+        ),
+      );
       const response = await fetch(
         "/api/universal-import/templates/test",
         {
@@ -1807,13 +1960,15 @@ export function UniversalImportClient({
         throw new Error(data.error ?? "解析失败，请稍后重试。");
       }
 
-      setParseProgress({
-        active: true,
-        value: 76,
-        label: "正在生成预览并执行校验...",
-        processed: Math.min(data.previewRows.length, data.rowCount ?? data.previewRows.length),
-        total: data.rowCount ?? data.previewRows.length,
-      });
+      setParseProgress(
+        createProgressState(
+          "active",
+          76,
+          "正在生成预览并执行校验...",
+          Math.min(data.previewRows.length, data.rowCount ?? data.previewRows.length),
+          data.rowCount ?? data.previewRows.length,
+        ),
+      );
       const nextColumnOptions = buildColumnOptionsFromDocument(data.document, effectiveRuleDsl);
       applyRuleToState(
         data.previewRows,
@@ -1827,17 +1982,39 @@ export function UniversalImportClient({
       setRuleTestSummary(
         `试解析完成：输出 ${data.rowCount ?? 0} 行，发现 ${data.issueCount ?? 0} 个校验问题。`,
       );
+      setParseRiskNotes(data.riskNotes ?? []);
       setTemplateInfo(`当前规则模式：${effectiveRuleDsl.mode}`);
       setStatus("文件解析成功，可继续编辑、保存规则或提交。");
       setParseFailure(null);
+      await waitForNextPaint();
+      const e2eMs = Math.round(performance.now() - startedAt);
       setPerformanceSnapshot({
-        parseMs: Math.round(performance.now() - startedAt),
+        fileName: file.name,
+        fileSize: file.size,
+        e2eMs,
         totalRows: data.rowCount ?? data.previewRows.length,
         renderedRows: Math.min(data.previewRows.length, PREVIEW_INITIAL_RENDER_COUNT),
+        hiddenRows: Math.max(data.previewRows.length - PREVIEW_INITIAL_RENDER_COUNT, 0),
         issueCount: data.issueCount ?? 0,
         renderMode: data.previewRows.length > PREVIEW_INITIAL_RENDER_COUNT ? "batched" : "full",
+        measuredAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+        browserLabel: getBrowserLabel(),
       });
-      setParseProgress({ active: true, value: 100, label: "解析完成", processed: data.rowCount ?? 0, total: data.rowCount ?? 0 });
+      setParseProgress(
+        createProgressState(
+          "success",
+          100,
+          "解析完成",
+          data.rowCount ?? 0,
+          data.rowCount ?? 0,
+          false,
+        ),
+      );
+      logActivity(
+        "试解析完成",
+        `${file.name} 输出 ${data.rowCount ?? 0} 行，校验问题 ${data.issueCount ?? 0} 个，端到端 ${e2eMs} ms。`,
+        "success",
+      );
     } catch (error) {
       const message = isNetworkFetchError(error)
         ? getFriendlyNetworkError("试解析")
@@ -1845,6 +2022,9 @@ export function UniversalImportClient({
           ? error.message
           : "解析失败，请稍后重试。";
       setStatus(message);
+      setParseProgress(
+        createProgressState("error", 100, "解析失败", 0, 0, false),
+      );
       setParseFailure({
         message,
         fileName: file.name,
@@ -1853,9 +2033,10 @@ export function UniversalImportClient({
         fileSize: file.size,
         lastModified: file.lastModified,
       });
+      logActivity("试解析失败", `${file.name} 解析失败：${message}`, "error");
     } finally {
       window.setTimeout(() => {
-        setParseProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
+        setParseProgress(createIdleProgressState());
       }, 700);
     }
   }
@@ -1940,7 +2121,7 @@ export function UniversalImportClient({
       ruleName: ruleNameInput.trim() || sheetName || "导入规则",
       sheetName,
       headers,
-      mapping,
+      mapping: editorRuleDsl.mapping,
       fileType,
       status: "ACTIVE",
       ruleDsl: editorRuleDsl,
@@ -2259,7 +2440,14 @@ export function UniversalImportClient({
       setRuleTestSummary("当前版本要求上传文件后由用户手动选择规则，系统不做自动匹配。");
       return;
     }
-    await handleFileParse(selectedFile, fileType, mapping, ruleDsl);
+    try {
+      const editorRuleDsl = buildRuleDslFromEditor();
+      setRuleDsl(editorRuleDsl);
+      await handleFileParse(selectedFile, fileType, editorRuleDsl.mapping, editorRuleDsl);
+      lastAutoPreviewSignatureRef.current = buildPreviewSignature(editorRuleDsl);
+    } catch (error) {
+      setRuleTestSummary(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和规则配置。");
+    }
   }
 
   async function handleTestDraftRule() {
@@ -2272,7 +2460,8 @@ export function UniversalImportClient({
       const editorRuleDsl = buildRuleDslFromEditor();
       setRuleDsl(editorRuleDsl);
       setStatus("正在使用当前 AI 建议和人工调整后的映射试解析。");
-      await handleFileParse(selectedFile, fileType, mapping, editorRuleDsl);
+      await handleFileParse(selectedFile, fileType, editorRuleDsl.mapping, editorRuleDsl);
+      lastAutoPreviewSignatureRef.current = buildPreviewSignature(editorRuleDsl);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和规则配置。");
     }
@@ -2322,15 +2511,19 @@ export function UniversalImportClient({
   }
 
   function showMorePreviewRows() {
-    setPreviewRenderLimit((current) => Math.min(current + PREVIEW_RENDER_BATCH_SIZE, draftRows.length));
+    const nextRenderedRows = Math.min(previewRenderLimit + PREVIEW_RENDER_BATCH_SIZE, draftRows.length);
+    setPreviewRenderLimit(nextRenderedRows);
     setPerformanceSnapshot((current) =>
       current
         ? {
             ...current,
-            renderedRows: Math.min(previewRenderLimit + PREVIEW_RENDER_BATCH_SIZE, draftRows.length),
+            renderedRows: nextRenderedRows,
+            hiddenRows: Math.max(draftRows.length - nextRenderedRows, 0),
+            measuredAt: new Date().toLocaleString("zh-CN", { hour12: false }),
           }
         : current,
     );
+    setStatus(`已继续加载预览，当前可见 ${nextRenderedRows} 行，剩余 ${Math.max(draftRows.length - nextRenderedRows, 0)} 行。`);
   }
 
   function showAllPreviewRows() {
@@ -2340,7 +2533,9 @@ export function UniversalImportClient({
         ? {
             ...current,
             renderedRows: draftRows.length,
+            hiddenRows: 0,
             renderMode: "full",
+            measuredAt: new Date().toLocaleString("zh-CN", { hour12: false }),
           }
         : current,
     );
@@ -2357,6 +2552,7 @@ export function UniversalImportClient({
   }
 
   async function submitImport() {
+    const submitStartedAt = performance.now();
     setSubmitBlockingIssues([]);
     if (!selectedRuleId) {
       setStatus("请先手动选择解析规则，再提交下单。");
@@ -2377,13 +2573,20 @@ export function UniversalImportClient({
     }
     setSubmitting(true);
     setSubmitSummary(null);
-    setSubmitProgress({
-      active: true,
-      value: 12,
-      label: "正在提交...",
-      processed: getProcessedCountFromProgress(12, draftRows.length),
-      total: draftRows.length,
-    });
+    setSubmitProgress(
+      createProgressState(
+        "active",
+        12,
+        "正在提交，系统正在准备批量入库请求...",
+        getProcessedCountFromProgress(12, draftRows.length),
+        draftRows.length,
+      ),
+    );
+    logActivity(
+      "开始提交下单",
+      `${fileName || `${sheetName} 批次`} 共 ${draftRows.length} 行，正在批量提交。`,
+      "info",
+    );
 
     const timer = window.setInterval(() => {
       setSubmitProgress((current) => {
@@ -2392,7 +2595,10 @@ export function UniversalImportClient({
         return {
           ...current,
           value: nextValue,
+          status: "active",
+          label: nextValue < 56 ? "正在提交，服务端处理中..." : "正在等待入库结果返回...",
           processed: getProcessedCountFromProgress(nextValue, current.total),
+          updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
         };
       });
     }, 180);
@@ -2441,23 +2647,37 @@ export function UniversalImportClient({
         summary.failCount > 0
           ? `提交完成：成功 ${summary.successCount} 行，失败 ${summary.failCount} 行；生成 ${summary.shipmentCount} 个运单，失败 ${summary.failedShipmentCount} 个。`
           : `提交成功 ${summary.successCount} 行，生成 ${summary.shipmentCount} 个运单。`;
-      setSubmitProgress({
-        active: true,
-        value: 100,
-        label: summary.failCount > 0 ? "部分完成" : "完成",
-        processed: draftRows.length,
-        total: draftRows.length,
-      });
+      const durationMs = Math.round(performance.now() - submitStartedAt);
+      setSubmitProgress(
+        createProgressState(
+          summary.failCount > 0 ? "warning" : "success",
+          100,
+          summary.failCount > 0 ? "提交完成，存在失败行" : "提交完成，全部入库成功",
+          draftRows.length,
+          draftRows.length,
+          false,
+        ),
+      );
       setStatus(statusMessage);
       setSubmitSummary({
         ...summary,
+        durationMs,
+        batchName: fileName || `${sheetName} 批次`,
+        fileName: fileName || "-",
+        ruleName: ruleNameInput.trim() || selectedRuleId,
+        status: summary.failCount > 0 ? "partial" : "success",
         failedResults,
         blockingIssues: [],
         submittedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
       });
       pushToast(statusMessage, summary.failCount > 0 ? "error" : "success");
+      logActivity(
+        summary.failCount > 0 ? "提交部分成功" : "提交成功",
+        `${summary.successCount}/${draftRows.length} 行已处理，耗时 ${durationMs} ms。`,
+        summary.failCount > 0 ? "error" : "success",
+      );
       void loadHistory({ ...historyFilters, page: 1 });
-      void loadHistoryCodes();
+      void loadHistoryCodes(true);
     } catch (error) {
       const message = isNetworkFetchError(error)
         ? getFriendlyNetworkError("提交导入")
@@ -2465,12 +2685,16 @@ export function UniversalImportClient({
           ? error.message
           : "提交导入失败，请稍后重试。";
       setStatus(message);
+      setSubmitProgress(
+        createProgressState("error", 100, "提交失败", 0, draftRows.length, false),
+      );
       pushToast(message, "error");
+      logActivity("提交失败", message, "error");
     } finally {
       window.clearInterval(timer);
       setSubmitting(false);
       window.setTimeout(() => {
-        setSubmitProgress({ active: false, value: 0, label: "", processed: 0, total: 0 });
+        setSubmitProgress(createIdleProgressState());
       }, 700);
     }
   }
@@ -2602,14 +2826,7 @@ export function UniversalImportClient({
 
         try {
           const editorRuleDsl = buildRuleDslFromEditor();
-          const signature = JSON.stringify({
-            fileName: selectedFile.name,
-            lastModified: selectedFile.lastModified,
-            fileType,
-            selectedRuleId,
-            mapping,
-            ruleDsl: editorRuleDsl,
-          });
+          const signature = buildPreviewSignature(editorRuleDsl);
 
           if (signature === lastAutoPreviewSignatureRef.current) {
             return;
@@ -2617,7 +2834,7 @@ export function UniversalImportClient({
 
           autoPreviewBusyRef.current = true;
           setStatus("检测到规则变更，正在自动试解析预览...");
-          await handleFileParse(selectedFile, fileType, mapping, editorRuleDsl);
+          await handleFileParse(selectedFile, fileType, editorRuleDsl.mapping, editorRuleDsl);
           lastAutoPreviewSignatureRef.current = signature;
         } catch (error) {
           setRuleStatus(error instanceof Error ? error.message : "当前规则配置不正确，请检查字段映射和规则配置。");
@@ -2771,6 +2988,12 @@ export function UniversalImportClient({
                           ))}
                         </select>
                       </label>
+                      <div className="search-field">
+                        <span>新建规则</span>
+                        <button type="button" className="secondary-button" onClick={beginNewRuleDraft}>
+                          新建规则
+                        </button>
+                      </div>
                       <label className="search-field">
                         <span>规则名称</span>
                         <input value={ruleNameInput} onChange={(event) => setRuleNameInput(event.target.value)} placeholder="例如：门店矩阵配送规则" />
@@ -2821,6 +3044,9 @@ export function UniversalImportClient({
                     <div className="toolbar import-action-toolbar" style={{ marginTop: 16 }}>
                       <button type="button" className="primary-button" onClick={() => void handleAiSuggest()} disabled={!selectedFile || aiSuggesting}>
                         {aiSuggesting ? "AI 生成中..." : "AI 生成规则建议"}
+                      </button>
+                      <button type="button" className="secondary-button" onClick={beginNewRuleDraft}>
+                        新建规则
                       </button>
                       <button type="button" className="secondary-button" onClick={() => void handleTestCurrentRule()} disabled={!selectedFile || !selectedRuleId}>
                         试解析选中规则
@@ -2906,6 +3132,28 @@ export function UniversalImportClient({
                             {item}
                           </div>
                         ))}
+                      </div>
+                    ) : null}
+
+                    {parseRiskNotes.length > 0 ? (
+                      <div className="validation-summary-card warning">
+                        <div className="card-heading compact">
+                          <div>
+                            <p className="section-kicker">解析风险提示</p>
+                            <h3>这些不是必然的映射错误</h3>
+                          </div>
+                          <span className="warning-count-badge">{parseRiskNotes.length} 条提示</span>
+                        </div>
+                        <p className="footnote">
+                          这里主要提示“源文件未提供真实值”或“系统只能兜底生成/推断”的情况，便于区分规则问题和源数据问题。
+                        </p>
+                        <div className="validation-summary-list">
+                          {parseRiskNotes.map((item) => (
+                            <div className="validation-summary-item warning" key={item}>
+                              {item}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ) : null}
 
@@ -3224,26 +3472,36 @@ export function UniversalImportClient({
                       <div className="progress-block">
                         <div className="progress-head">
                           <span>文件试解析</span>
-                          <strong>{parseProgress.active ? `${parseProgress.value}% · ${parseProgress.processed}/${parseProgress.total}` : "待处理"}</strong>
+                          <strong>{formatProgressHeadline(parseProgress)}</strong>
                         </div>
+                        <p className={`progress-label status-${parseProgress.status}`}>{parseProgress.label || "等待上传样例文件并手动选择规则。"}</p>
                         <div className="progress-track">
                           <span className="progress-bar" style={{ width: `${parseProgress.value}%` }} />
+                        </div>
+                        <div className="progress-meta">
+                          <span>状态：{parseProgress.status === "idle" ? "待处理" : parseProgress.status === "active" ? "处理中" : parseProgress.status === "success" ? "已完成" : parseProgress.status === "warning" ? "部分完成" : "失败"}</span>
+                          <span>{parseProgress.updatedAt ? `更新时间：${parseProgress.updatedAt}` : "尚未开始"}</span>
                         </div>
                       </div>
                       <div className="progress-block">
                         <div className="progress-head">
                           <span>提交下单</span>
-                          <strong>{submitProgress.active ? `${submitProgress.value}% · ${submitProgress.processed}/${submitProgress.total}` : "待处理"}</strong>
+                          <strong>{formatProgressHeadline(submitProgress)}</strong>
                         </div>
+                        <p className={`progress-label status-${submitProgress.status}`}>{submitProgress.label || "等待预览数据通过校验后提交。"}</p>
                         <div className="progress-track">
                           <span className="progress-bar" style={{ width: `${submitProgress.value}%` }} />
+                        </div>
+                        <div className="progress-meta">
+                          <span>状态：{submitProgress.status === "idle" ? "待处理" : submitProgress.status === "active" ? "处理中" : submitProgress.status === "success" ? "已完成" : submitProgress.status === "warning" ? "部分完成" : "失败"}</span>
+                          <span>{submitProgress.updatedAt ? `更新时间：${submitProgress.updatedAt}` : "尚未开始"}</span>
                         </div>
                       </div>
                       {performanceSnapshot ? (
                         <div className="performance-metrics">
                           <div>
-                            <span>解析耗时</span>
-                            <strong>{performanceSnapshot.parseMs} ms</strong>
+                            <span>端到端耗时</span>
+                            <strong>{performanceSnapshot.e2eMs} ms</strong>
                           </div>
                           <div>
                             <span>预览数据</span>
@@ -3252,6 +3510,10 @@ export function UniversalImportClient({
                           <div>
                             <span>首屏渲染</span>
                             <strong>{performanceSnapshot.renderedRows} 行</strong>
+                          </div>
+                          <div>
+                            <span>未展开行数</span>
+                            <strong>{performanceSnapshot.hiddenRows} 行</strong>
                           </div>
                           <div>
                             <span>渲染策略</span>
@@ -3263,7 +3525,34 @@ export function UniversalImportClient({
                           </div>
                           <div>
                             <span>考试目标</span>
-                            <strong>{performanceSnapshot.parseMs <= 10000 ? "满足 10 秒内" : "需继续优化"}</strong>
+                            <strong>{performanceSnapshot.e2eMs <= 10000 ? "满足 10 秒内" : "需继续优化"}</strong>
+                          </div>
+                          <div>
+                            <span>文件与浏览器</span>
+                            <strong>{performanceSnapshot.fileName} · {performanceSnapshot.browserLabel}</strong>
+                          </div>
+                          <div>
+                            <span>测试口径</span>
+                            <strong>{formatFileSize(performanceSnapshot.fileSize)} · {performanceSnapshot.measuredAt}</strong>
+                          </div>
+                        </div>
+                      ) : null}
+                      {activityFeed.length > 0 ? (
+                        <div className="activity-feed">
+                          <div className="card-heading compact">
+                            <div>
+                              <p className="section-kicker">过程轨迹</p>
+                              <h3>最近 8 条导入/提交事件</h3>
+                            </div>
+                          </div>
+                          <div className="activity-feed-list">
+                            {activityFeed.map((item) => (
+                              <div className={`activity-feed-item ${item.tone}`} key={item.id}>
+                                <strong>{item.title}</strong>
+                                <span>{item.detail}</span>
+                                <em>{item.timestamp}</em>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       ) : null}
@@ -3365,7 +3654,24 @@ export function UniversalImportClient({
                         <span>提交时间</span>
                         <strong>{submitSummary.submittedAt}</strong>
                       </div>
+                      <div>
+                        <span>提交耗时</span>
+                        <strong>{submitSummary.durationMs} ms</strong>
+                      </div>
+                      <div>
+                        <span>提交批次</span>
+                        <strong>{submitSummary.batchName}</strong>
+                      </div>
+                      <div>
+                        <span>使用规则</span>
+                        <strong>{submitSummary.ruleName}</strong>
+                      </div>
                     </div>
+                    <p className={`result-summary-status status-${submitSummary.status === "partial" ? "warning" : "success"}`}>
+                      {submitSummary.status === "partial"
+                        ? "本次提交已完成，但仍有失败运单需要人工处理。"
+                        : "本次提交已全部完成，可直接用于录屏和结果截图取证。"}
+                    </p>
                     {submitSummary.failedResults.length > 0 ? (
                       <div className="submit-failure-list">
                         <div className="card-heading compact">
@@ -3605,6 +3911,9 @@ export function UniversalImportClient({
                               <th>SKU 名称</th>
                               <th>规格型号</th>
                               <th>数量</th>
+                              <th>重量</th>
+                              <th>件数</th>
+                              <th>温层</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -3616,6 +3925,9 @@ export function UniversalImportClient({
                                 <td>{item.skuName}</td>
                                 <td>{item.skuSpec || "-"}</td>
                                 <td>{item.skuQuantity}</td>
+                                <td>{item.weight ?? "-"}</td>
+                                <td>{item.pieces ?? "-"}</td>
+                                <td>{item.temperature || "-"}</td>
                               </tr>
                             ))}
                           </tbody>

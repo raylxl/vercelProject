@@ -135,6 +135,9 @@ model UniversalImportShipmentItem {
   skuName         String                            @db.VarChar(128)
   skuQuantity     Float
   skuSpec         String?                           @db.VarChar(128)
+  weight          Float?
+  pieces          Int?
+  temperature     String?                           @db.VarChar(16)
   raw             Json?
   createdAt       DateTime                          @default(now())
 

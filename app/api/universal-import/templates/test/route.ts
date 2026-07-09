@@ -1,5 +1,6 @@
 import {
   buildTemplateFingerprint,
+  inferBestImportHeaderRowIndex,
   inferMappingFromHeaders,
   type UniversalImportMapping,
 } from "@/lib/universal-import";
@@ -11,6 +12,8 @@ import {
   type UniversalImportRuleDsl,
 } from "@/lib/universal-import-engine";
 import { resolveImportFileType } from "@/lib/universal-import-file-type";
+import { buildHeuristicImportRule } from "@/lib/universal-import-heuristics";
+import { mergeRiskNotes } from "@/lib/universal-import-risk";
 import { sendDingTalkAlert } from "@/lib/dingtalk-alert";
 import { ensureUniversalImportAccess } from "@/lib/universal-import-access";
 import { NextResponse } from "next/server";
@@ -37,7 +40,7 @@ export async function POST(request: Request) {
     const ruleDslRaw = formData.get("ruleDsl")?.toString() ?? "";
 
     if (!(file instanceof File)) {
-      return NextResponse.json({ error: "请上传样例文件后再试解析。" }, { status: 400 });
+      return NextResponse.json({ error: "请先上传样例文件后再试解析。" }, { status: 400 });
     }
 
     if (file.size <= 0) {
@@ -61,26 +64,60 @@ export async function POST(request: Request) {
         {
           error:
             fileType === "word"
-              ? "Word 文件内容暂无法读取，请确认文件未损坏，或先转为 Excel/PDF 后重试。"
-              : "文件内容暂无法读取，请确认文件未损坏后重试。",
+              ? "Word 文件内容暂时无法读取，请确认文件未损坏，或先转为 Excel/PDF 后重试。"
+              : "文件内容暂时无法读取，请确认文件未损坏后重试。",
         },
         { status: 422 },
       );
     }
 
-    const inferredMapping = inferMappingFromHeaders(document.headers);
+    const inferredHeaderRowIndex = inferBestImportHeaderRowIndex(document.sections[0]?.rows ?? [], 16);
+    const inferredHeaders = document.sections[0]?.rows[inferredHeaderRowIndex] ?? document.headers;
+    const inferredMapping = inferMappingFromHeaders(inferredHeaders);
+    const heuristic = buildHeuristicImportRule(document, fileType);
     const mapping = mappingRaw
       ? parseJsonField<UniversalImportMapping>(mappingRaw, "字段映射")
-      : inferredMapping;
+      : heuristic.mapping;
     const ruleDsl = ruleDslRaw
       ? parseJsonField<UniversalImportRuleDsl>(ruleDslRaw, "解析规则 DSL")
-      : createDefaultRuleDsl(mapping, fileType);
+      : mappingRaw
+        ? createDefaultRuleDsl(mapping, fileType)
+        : heuristic.rule;
+
+    const effectiveRuleDsl = ruleDslRaw
+      ? ruleDsl
+      : mappingRaw
+        ? {
+            ...ruleDsl,
+            mapping,
+            transforms: ruleDsl.transforms.map((transform) =>
+              transform.type === "header_mapping"
+                ? {
+                    ...transform,
+                    config: {
+                      ...(transform.config ?? {}),
+                      headerRowIndex: inferredHeaderRowIndex,
+                      dataStartRowIndex:
+                        typeof transform.config?.dataStartRowIndex === "number" &&
+                        transform.config.dataStartRowIndex > inferredHeaderRowIndex
+                          ? transform.config.dataStartRowIndex
+                          : inferredHeaderRowIndex + 1,
+                      fieldColumns: mapping,
+                    },
+                  }
+                : transform,
+            ),
+          }
+        : {
+            ...heuristic.rule,
+            mapping,
+          };
 
     const result = await executeUniversalImportRule({
       fileBuffer,
       fileType,
       originalFileName: file.name,
-      rule: ruleDsl,
+      rule: effectiveRuleDsl,
     });
 
     if ((result.rowCount ?? result.previewRows.length) === 0) {
@@ -100,6 +137,7 @@ export async function POST(request: Request) {
       ...result,
       fingerprint: buildTemplateFingerprint(document.sheetName, document.headers),
       inferredMapping,
+      riskNotes: mergeRiskNotes(result.riskNotes),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "试解析失败，请稍后重试。";

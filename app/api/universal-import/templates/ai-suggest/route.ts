@@ -1,5 +1,7 @@
 import {
+  inferBestImportHeaderRowIndex,
   inferMappingFromHeaders,
+  scoreImportHeaderRow,
   UNIVERSAL_IMPORT_FIELDS,
   type UniversalImportField,
   type UniversalImportMapping,
@@ -11,6 +13,11 @@ import {
   type UniversalImportRuleDsl,
 } from "@/lib/universal-import-engine";
 import { resolveImportFileType } from "@/lib/universal-import-file-type";
+import {
+  buildHeuristicImportRule,
+  inferKeyValueExtractionConfig as inferHeuristicKeyValueExtractionConfig,
+} from "@/lib/universal-import-heuristics";
+import { collectRuleDesignRiskNotes, mergeRiskNotes } from "@/lib/universal-import-risk";
 import {
   createLlmChatCompletion,
   getConfiguredLlmModel,
@@ -145,37 +152,9 @@ function normalizeHeaderText(value: unknown) {
     .replace(/[()[\]{}<>【】“”"'`’‘、，。；：！？,.!?/\\|]/g, "");
 }
 
-function scoreHeaderRow(row: string[]) {
-  const normalizedCells = row.map((cell) => normalizeHeaderText(cell)).filter(Boolean);
-  if (normalizedCells.length === 0) {
-    return 0;
-  }
-
-  const aliasScore = UNIVERSAL_IMPORT_FIELDS.reduce((score, field) => {
-    const aliases = field.aliases.map((alias) => normalizeHeaderText(alias)).filter(Boolean);
-    const matched = normalizedCells.some((cell) =>
-      aliases.some((alias) => cell === alias || cell.includes(alias) || alias.includes(cell)),
-    );
-    return score + (matched ? 4 : 0);
-  }, 0);
-
-  return normalizedCells.length + aliasScore;
-}
-
 function inferBestHeaderRowIndex(document: Awaited<ReturnType<typeof parseImportDocument>>) {
   const rows = document.sections[0]?.rows ?? [];
-  const candidates = rows.slice(0, 12);
-  if (candidates.length === 0) {
-    return 0;
-  }
-
-  return candidates.reduce(
-    (best, row, index) => {
-      const score = scoreHeaderRow(row);
-      return score > best.score ? { index, score } : best;
-    },
-    { index: 0, score: 0 },
-  ).index;
+  return inferBestImportHeaderRowIndex(rows, 12);
 }
 
 function getTransformConfig(rule: UniversalImportRuleDsl, transformType: string) {
@@ -223,7 +202,7 @@ function buildDocumentSummary(
 ) {
   const headerRowIndex = getRecommendedHeaderRowIndex(document, rule);
   const columnOptions = buildColumnOptions(document, headerRowIndex);
-  const tailSourceOptions = inferKeyValueExtractionConfig(document)?.samples ?? {};
+  const tailSourceOptions = inferHeuristicKeyValueExtractionConfig(document)?.samples ?? {};
 
   return {
     fileType,
@@ -438,7 +417,7 @@ function detectCardSplitRecommendation(document: Awaited<ReturnType<typeof parse
   }
 
   const itemHeaderIndex = rows.findIndex((row, index) =>
-    index > startIndex && scoreHeaderRow(row) >= 12 && /编码|名称|数量|SKU/i.test(row.join(" ")),
+    index > startIndex && scoreImportHeaderRow(row) >= 12 && /编码|名称|数量|SKU/i.test(row.join(" ")),
   );
   const itemHeader = itemHeaderIndex >= 0 ? rows[itemHeaderIndex] : [];
 
@@ -524,6 +503,9 @@ const KEY_VALUE_FIELD_ALIASES: Record<UniversalImportField, string[]> = {
   skuName: [],
   skuQuantity: [],
   skuSpec: [],
+  weight: ["重量", "商品重量", "发货重量", "总重量", "毛重", "净重"],
+  pieces: ["件数", "总件数", "运单件数", "包裹件数", "包装件数", "箱数", "包数"],
+  temperature: ["温层", "温区", "温度层", "配送温层"],
   note: ["备注", "收货机构备注", "附加说明", "说明"],
 };
 
@@ -755,34 +737,23 @@ function createFallbackSuggestion(
   suggestedMapping: UniversalImportMapping,
   document: Awaited<ReturnType<typeof parseImportDocument>>,
 ): AiSuggestSuccessResponse {
-  const suggestedRule = createDefaultRuleDsl(suggestedMapping, fileType);
-  const headerRowIndex = inferBestHeaderRowIndex(document);
-  const columnOptions = buildColumnOptions(document, headerRowIndex);
-  const effectiveHeaders = columnOptions.map((option) => option.header);
-  const effectiveMapping = fileType === "excel"
-    ? mergeMappingCandidates(undefined, inferMappingFromHeaders(effectiveHeaders), suggestedMapping)
-    : suggestedMapping;
-  const headerRecommendedRule = applyHeaderRecommendation(suggestedRule, headerRowIndex, effectiveMapping);
-  const complexRecommendedRule = applyLocalComplexRecommendations(
-    headerRecommendedRule,
-    document,
-    effectiveMapping,
-    headerRowIndex,
-  );
-  const tailRecommended = applyKeyValueExtractionRecommendation(complexRecommendedRule, document);
-  const recommendedRule = ensureGroupByExternalCode(tailRecommended.rule);
+  const heuristic = buildHeuristicImportRule(document, fileType);
+  const effectiveMapping = heuristic.mapping;
+  const recommendedRule = heuristic.rule;
+  const extractedFields = heuristic.keyValueFields;
+  const heuristicRiskNotes = collectRuleDesignRiskNotes(effectiveMapping, recommendedRule);
   const confidenceReport = UNIVERSAL_IMPORT_FIELDS.map((field) => ({
     field: field.key,
     confidence:
       typeof effectiveMapping[field.key] === "number"
         ? 0.92
-        : tailRecommended.extractedFields.includes(field.key)
+        : extractedFields.includes(field.key)
           ? 0.82
           : 0.45,
     source:
       typeof effectiveMapping[field.key] === "number"
         ? "header-match"
-        : tailRecommended.extractedFields.includes(field.key)
+        : extractedFields.includes(field.key)
           ? "tail-key-value"
           : "heuristic-fallback",
   }));
@@ -794,21 +765,20 @@ function createFallbackSuggestion(
       aiConfidenceReport: confidenceReport,
     },
     confidenceReport,
-    riskNotes: [
-      fileType !== "excel" ? "当前为非 Excel 文档，部分字段来自文本结构推断，建议人工确认。" : "",
-      document.sections.length > 1 ? "检测到多段或多 Sheet 内容，建议开启多 Sheet 合并或卡片拆分规则。" : "",
-      document.rawRows.length === 0 ? "未识别到标准表格数据，建议切换到纯文本解析模式。" : "",
-      tailRecommended.extractedFields.length > 0
-        ? `检测到文档键值信息区，已建议通过 tail_text_extract 提取字段：${tailRecommended.extractedFields.map((field) => UNIVERSAL_IMPORT_FIELDS.find((item) => item.key === field)?.label ?? field).join("、")}。`
+    riskNotes: mergeRiskNotes([
+      fileType !== "excel" ? "???? Excel ???????????????????????" : "",
+      document.sections.length > 1 ? "??????? Sheet ???????? Sheet ??????????" : "",
+      document.rawRows.length === 0 ? "????????????????????????" : "",
+      extractedFields.length > 0
+        ? "???????????????? tail_text_extract ?????" + extractedFields.map((field) => UNIVERSAL_IMPORT_FIELDS.find((item) => item.key === field)?.label ?? field).join("?") + "?"
         : "",
-      "当前结果来自本地兜底规则，并非大模型输出。",
-    ].filter(Boolean),
+      "?????????????????????",
+    ].filter(Boolean), heuristicRiskNotes),
     provider: "fallback",
     model: "local-heuristic",
-    aiSummary: "本次 AI 建议走了本地兜底逻辑，未使用远程大模型输出。",
+    aiSummary: "?? AI ??????????????????????",
   };
 }
-
 function normalizeMapping(candidate: Partial<Record<UniversalImportField, number | null>> | undefined, fallback: UniversalImportMapping) {
   return Object.fromEntries(
     UNIVERSAL_IMPORT_FIELDS.map((field) => {
@@ -998,7 +968,7 @@ function summarizeDocumentStructure(document: Awaited<ReturnType<typeof parseImp
     .slice(0, 12)
     .map((row, index) => ({
       rowIndex: index,
-      score: scoreHeaderRow(row),
+      score: scoreImportHeaderRow(row),
       cells: row,
     }))
     .filter((item) => item.score > 0)
@@ -1152,6 +1122,7 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
   );
   const tailRecommended = applyKeyValueExtractionRecommendation(complexRecommendedRule, document);
   const suggestedRule = ensureGroupByExternalCode(tailRecommended.rule);
+  const heuristicRiskNotes = collectRuleDesignRiskNotes(mapping, suggestedRule);
 
   const normalizedConfidenceReport =
       confidenceReport?.map((item) => ({
@@ -1176,12 +1147,12 @@ async function generateRuleWithLlm(document: Awaited<ReturnType<typeof parseImpo
       aiConfidenceReport: normalizedConfidenceReport,
     },
     confidenceReport: normalizedConfidenceReport,
-    riskNotes: [
+    riskNotes: mergeRiskNotes([
       ...riskNotes,
       tailRecommended.extractedFields.length > 0
         ? `检测到键值信息区，建议通过 tail_text_extract 提取：${tailRecommended.extractedFields.map((field) => UNIVERSAL_IMPORT_FIELDS.find((item) => item.key === field)?.label ?? field).join("、")}。`
         : "",
-    ].filter(Boolean),
+    ].filter(Boolean), heuristicRiskNotes),
     aiSummary: parsed.summary,
   };
 }
@@ -1271,6 +1242,20 @@ export async function POST(request: Request) {
         module: "ai-suggest",
       },
     });
-    return NextResponse.json({ error: "AI 规则建议生成失败，请稍后重试。" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "";
+    const isReadableBusinessError =
+      message.includes("文件") ||
+      message.toLowerCase().includes("mammoth") ||
+      message.toLowerCase().includes("zip") ||
+      message.toLowerCase().includes("word");
+
+    return NextResponse.json(
+      {
+        error: isReadableBusinessError
+          ? "文件内容暂无法读取，请确认文件未损坏，或先转为 Excel/PDF 后重试。"
+          : "AI 规则建议生成失败，请稍后重试。",
+      },
+      { status: isReadableBusinessError ? 422 : 500 },
+    );
   }
 }

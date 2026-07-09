@@ -1,5 +1,7 @@
 import {
   formatIssueLabel,
+  normalizeNumericImportValue,
+  normalizeTemperatureImportValue,
   type UniversalImportRow,
   validateImportRows,
 } from "@/lib/universal-import";
@@ -62,6 +64,26 @@ function buildAutoExternalCode(batchName: string, row: UniversalImportRow, index
   const batchToken = normalizeAutoCodeToken(batchName) || "BATCH";
   const rowNumber = row.rowIndex || index + 1;
   return `AUTO-${batchToken}-${token}-${rowNumber}`.slice(0, 64);
+}
+
+function getShipmentPersistenceBusinessError(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    lowerMessage.includes("too long") ||
+    lowerMessage.includes("value too long") ||
+    lowerMessage.includes("varchar") ||
+    message.includes("长度")
+  ) {
+    return "存在字段长度超过系统限制，请检查外部编码、收货信息、SKU 信息和备注长度后再提交。";
+  }
+
+  return null;
+}
+
+function formatShipmentPersistenceError(error: unknown) {
+  return getShipmentPersistenceBusinessError(error) ?? (error instanceof Error ? error.message : "运单批量入库失败");
 }
 
 function parsePagination(searchParams: URLSearchParams) {
@@ -664,8 +686,11 @@ export async function POST(request: Request) {
               sourceRowIndex: row.rowIndex,
               skuCode: row.skuCode.trim(),
               skuName: row.skuName.trim(),
-              skuQuantity: Number.parseFloat(row.skuQuantity.trim()),
+              skuQuantity: Number.parseFloat(normalizeNumericImportValue(row.skuQuantity.trim())),
               skuSpec: row.skuSpec.trim() || null,
+              weight: row.weight.trim() ? Number.parseFloat(normalizeNumericImportValue(row.weight.trim())) : null,
+              pieces: row.pieces.trim() ? Number.parseInt(normalizeNumericImportValue(row.pieces.trim()), 10) : null,
+              temperature: row.temperature.trim() ? normalizeTemperatureImportValue(row.temperature.trim()) : null,
               raw: row,
             }));
           });
@@ -679,7 +704,8 @@ export async function POST(request: Request) {
         { timeout: 120_000 },
       );
     } catch (shipmentError) {
-      const message = shipmentError instanceof Error ? shipmentError.message : "运单批量入库失败";
+      const businessError = getShipmentPersistenceBusinessError(shipmentError);
+      const message = formatShipmentPersistenceError(shipmentError);
       await prisma.universalImportBatch.update({
         where: {
           id: batch.id,
@@ -725,7 +751,7 @@ export async function POST(request: Request) {
             error: message,
           })),
         },
-        { status: 500 },
+        { status: businessError ? 400 : 500 },
       );
     }
 
